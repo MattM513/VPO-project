@@ -38,7 +38,7 @@ def metro2025(type_,viewImages = 1):
 
     for n_val in num_images:
         nom = f'IM ({n_val})'
-        im_path = os.path.join('BD', f'{nom}.JPG')
+        im_path = os.path.join('../BD_METRO', f'{nom}.JPG')
         im = np.array(Image.open(im_path).convert('RGB')) / 255.0
 
         if viewImages:
@@ -63,13 +63,9 @@ def metro2025(type_,viewImages = 1):
         # les concatène à BD
         # BD sera stocké dans un fichier .mat
         # Il sera porté en entrée de la fonction d'évaluation quantitative
-        if type_ == 'Test':
-            X = sio.loadmat('X.mat')['BD']  
-        else:
-            X = sio.loadmat('Y.mat')['BD']  
-            
-        ind = np.where(X[:, 0] == n_val)[0]
-        bd  = X[ind,:]
+        # Appel de votre fonction de reconnaissance
+        from myMetroProcessing import processOneMetroImage
+        im_resized, bd = processOneMetroImage(nom, im, n_val, resize_factor)
        
             
         if viewImages:    
@@ -91,4 +87,12 @@ def metro2025(type_,viewImages = 1):
     return file_out, resize_factor
 
 # metro2025('Learn',viewImages=1)  # Pour travailler sur la base d'appentissage
-metro2025('Test',viewImages=0)  # Pour travailler sur la base de test
+# metro2025('Test',viewImages=0)  # Pour travailler sur la base de test
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1:
+        mode = sys.argv[1]
+        metro2025(mode, viewImages=0)
+    else:
+        print("Usage: python metro2025_ID.py [Learn|Test]")
