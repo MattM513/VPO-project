@@ -15,10 +15,12 @@ from PIL import Image
 import os
 from collections import defaultdict
 from sklearn.cluster import KMeans
+import pytesseract  # Pour OCR des numéros
+from scipy import ndimage
 
 class ImprovedMetroSystem:
     """
-    Système amélioré de détection de signes de métro
+    Système amélioré de détection de signes de métro avec validation par numéros
     """
     
     def __init__(self):
@@ -157,12 +159,12 @@ class ImprovedMetroSystem:
     
     def detect_metro_signs(self, image, debug=True):
         """
-        Détecte les signes de métro avec approche équilibrée
+        Approche hybride intelligente: couleur ET OCR avec validation croisée
         """
         if debug:
             print(f"🔍 DÉTECTION AVEC SYSTÈME {'ENTRAÎNÉ' if self.is_trained else 'THÉORIQUE'}")
         
-        # 1. Détection des cercles candidats avec approche équilibrée
+        # 1. Détection des cercles candidats
         circles = self._detect_circles(image)
         if debug:
             print(f"   Cercles candidats: {len(circles)}")
@@ -170,37 +172,847 @@ class ImprovedMetroSystem:
         if not circles:
             return []
         
-        # 2. Validation par couleur avec seuils équilibrés
-        valid_detections = []
+        # 2. Double validation: couleur ET OCR en parallèle
+        candidates = []
         colors_to_use = self.learned_colors if self.is_trained else self.theoretical_colors
-        tolerances_to_use = self.color_tolerances if self.is_trained else {l: 0.18 for l in colors_to_use}
+        tolerances_to_use = self.color_tolerances if self.is_trained else {l: 0.20 for l in colors_to_use}
         
         for i, (x, y, r) in enumerate(circles):
-            validation = self._validate_circle_by_color(image, x, y, r, colors_to_use, tolerances_to_use)
+            # A. Validation couleur
+            color_validation = self._validate_circle_by_color(image, x, y, r, colors_to_use, tolerances_to_use)
             
-            if validation['is_valid']:
-                detection = {
+            # B. Validation OCR
+            ocr_result = self._careful_ocr_validation(image, x, y, r)
+            if ocr_result is None:
+                ocr_result = {'is_valid': False, 'number': None, 'confidence': 0, 'rejected_text': 'erreur_none'}
+
+            
+            # C. Analyse intelligente des résultats
+            analysis = self._smart_validation_analysis(color_validation, ocr_result, x, y, r)
+            
+            if analysis['is_valid']:
+                candidates.append({
                     'center': (x, y),
                     'radius': r,
-                    'bbox': validation['bbox'],
-                    'ligne': validation['ligne'],
-                    'confidence': validation['confidence'],
-                    'color_distance': validation['color_distance']
-                }
-                valid_detections.append(detection)
+                    'bbox': (max(0, x-r-5), min(image.shape[1], x+r+5), 
+                            max(0, y-r-5), min(image.shape[0], y+r+5)),
+                    'ligne': analysis['final_ligne'],
+                    'confidence': analysis['confidence'],
+                    'color_ligne': color_validation['ligne'] if color_validation['is_valid'] else None,
+                    'ocr_number': ocr_result['number'] if ocr_result['is_valid'] else None,
+                    'validation_method': analysis['method']
+                })
                 
                 if debug:
-                    print(f"   ✅ Cercle {i+1}: Ligne {validation['ligne']} "
-                          f"(conf: {validation['confidence']:.2f}, "
-                          f"dist: {validation['color_distance']:.3f})")
+                    color_info = f"🎨L{color_validation['ligne']}" if color_validation['is_valid'] else "🎨❌"
+                    ocr_info = f"🔢{ocr_result['number']}" if ocr_result['is_valid'] else "🔢❌"
+                    method_emoji = {"color_priority": "🎨", "ocr_priority": "🔢", "agreement": "✅", "fallback": "⚠️"}
+                    
+                    print(f"   {method_emoji[analysis['method']]} Cercle {i+1}: L{analysis['final_ligne']} "
+                          f"({color_info}, {ocr_info}, conf: {analysis['confidence']:.2f})")
+            else:
+                if debug:
+                    color_info = f"🎨L{color_validation['ligne']}" if color_validation['is_valid'] else "🎨❌"
+                    ocr_info = f"🔢{ocr_result['number']}" if ocr_result['is_valid'] else f"🔢'{ocr_result.get('rejected_text', '?')}'"
+                    print(f"   ❌ Cercle {i+1}: Rejeté ({color_info}, {ocr_info})")
         
-        # 3. Supprimer les doublons proches
-        final_detections = self._remove_duplicate_detections(valid_detections)
+        if debug:
+            print(f"   Candidats validés: {len(candidates)}")
+        
+        # 3. Supprimer les doublons avec logique intelligente
+        final_detections = self._smart_duplicate_removal(candidates)
         
         if debug:
             print(f"🎯 DÉTECTIONS FINALES: {len(final_detections)}")
         
         return final_detections
+    
+    def _careful_ocr_validation(self, image, x, y, r):
+        """
+        OCR plus prudent avec validation stricte de la forme du signe
+        """
+        # Test préliminaire: est-ce que ça ressemble à un signe métro ?
+        if not self._looks_like_metro_sign(image, x, y, r):
+            return {'is_valid': False, 'number': None, 'confidence': 0, 'rejected_text': 'forme'}
+        
+        # Extraire région centrale avec taille adaptée
+        center_size = max(8, int(r * 0.7))
+        x1, x2 = max(0, x - center_size), min(image.shape[1], x + center_size)
+        y1, y2 = max(0, y - center_size), min(image.shape[0], y + center_size)
+        
+        if x2 <= x1 or y2 <= y1:
+            return {'is_valid': False, 'number': None, 'confidence': 0, 'rejected_text': 'taille'}
+        
+        center_region = image[y1:y2, x1:x2]
+        
+        try:
+            # Préparation OCR avec multiple tentatives
+            results = []
+            
+            # Méthode 1: Standard
+            result1 = self._ocr_attempt_standard(center_region)
+            if result1['number'] is not None:
+                results.append(('standard', result1['number'], result1['confidence']))
+            
+            # Méthode 2: Contraste élevé
+            result2 = self._ocr_attempt_high_contrast(center_region)
+            if result2['number'] is not None:
+                results.append(('contrast', result2['number'], result2['confidence']))
+            
+            # Méthode 3: Morphologie
+            result3 = self._ocr_attempt_morphology(center_region)
+            if result3['number'] is not None:
+                results.append(('morpho', result3['number'], result3['confidence']))
+            
+            # Analyser les résultats
+            if results:
+                numbers_found = [r[1] for r in results]
+                number_counts = {n: numbers_found.count(n) for n in set(numbers_found)}
+                best_number = max(number_counts.keys(), key=lambda n: number_counts[n])
+                consensus_count = number_counts[best_number]
+                base_conf = max([r[2] for r in results if r[1] == best_number])
+                consensus_bonus = 0.1 * (consensus_count - 1)
+                final_conf = min(0.95, base_conf + consensus_bonus)
+                
+                return {'is_valid': True, 'number': best_number, 'confidence': final_conf}
+            
+            # Aucun résultat exploitable
+            return {'is_valid': False, 'number': None, 'confidence': 0, 'rejected_text': 'aucun'}
+        
+        except Exception as e:
+            # 🔁 Correction ici : en cas d'erreur, retour d'un résultat clair
+            return {'is_valid': False, 'number': None, 'confidence': 0, 'rejected_text': str(e)}
+
+    def _ocr_attempt_standard(self, region):
+        """
+        Tentative OCR standard
+        """
+        try:
+            h, w = region.shape[:2]
+            scale_factor = max(1, 50 // min(h, w))
+            resized = cv2.resize((region * 255).astype(np.uint8), 
+                            (w * scale_factor, h * scale_factor))
+            
+            gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY) if len(resized.shape) == 3 else resized
+            binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                        cv2.THRESH_BINARY, 11, 2)
+            
+            config = '--oem 3 --psm 8 -c tessedit_char_whitelist=0123456789'
+            text = pytesseract.image_to_string(binary, config=config).strip()
+            
+            if text.isdigit() and len(text) <= 2:
+                number = int(text)
+                if 1 <= number <= 14:
+                    return {'number': number, 'confidence': 0.8}
+            
+        except:
+            pass
+        
+        return {'number': None, 'confidence': 0}
+    
+    def _ocr_attempt_high_contrast(self, region):
+        """
+        Tentative OCR avec contraste élevé
+        """
+        try:
+            h, w = region.shape[:2]
+            scale_factor = max(2, 60 // min(h, w))
+            resized = cv2.resize((region * 255).astype(np.uint8), 
+                               (w * scale_factor, h * scale_factor))
+            
+            gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY) if len(resized.shape) == 3 else resized
+            
+            # Méthode OTSU pour contraste optimal
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # Nettoyer
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+            cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+            
+            config = '--oem 3 --psm 10 -c tessedit_char_whitelist=0123456789'
+            text = pytesseract.image_to_string(cleaned, config=config).strip()
+            
+            if text.isdigit() and len(text) <= 2:
+                number = int(text)
+                if 1 <= number <= 14:
+                    return {'number': number, 'confidence': 0.85}
+            
+        except:
+            pass
+        
+        return {'number': None, 'confidence': 0}
+    
+    def _ocr_attempt_morphology(self, region):
+        """
+        Tentative OCR avec prétraitement morphologique
+        """
+        try:
+            h, w = region.shape[:2]
+            scale_factor = max(2, 55 // min(h, w))
+            resized = cv2.resize((region * 255).astype(np.uint8), 
+                               (w * scale_factor, h * scale_factor))
+            
+            gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY) if len(resized.shape) == 3 else resized
+            
+            # Seuillage avec moyenne + écart-type
+            threshold = np.mean(gray) + np.std(gray) * 0.5
+            binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)[1]
+            
+            # Morphologie pour renforcer les formes
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+            
+            config = '--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789'
+            text = pytesseract.image_to_string(binary, config=config).strip()
+            
+            if text.isdigit() and len(text) <= 2:
+                number = int(text)
+                if 1 <= number <= 14:
+                    return {'number': number, 'confidence': 0.75}
+            
+        except:
+            pass
+        
+        return {'number': None, 'confidence': 0}
+    
+    def _looks_like_metro_sign(self, image, x, y, r):
+        """
+        Test rapide pour vérifier si ça ressemble à un signe métro
+        """
+        # Extraire région
+        margin = 3
+        x1, x2 = max(0, x-r-margin), min(image.shape[1], x+r+margin)
+        y1, y2 = max(0, y-r-margin), min(image.shape[0], y+r+margin)
+        
+        if x2 <= x1 or y2 <= y1:
+            return False
+            
+        region = image[y1:y2, x1:x2]
+        
+        # Test 1: Doit avoir de la couleur (pas que du gris/blanc)
+        hsv_region = color.rgb2hsv(region)
+        saturation = hsv_region[:, :, 1]
+        colorful_ratio = np.sum(saturation > 0.2) / saturation.size
+        
+        if colorful_ratio < 0.2:  # Au moins 20% de pixels colorés
+            return False
+        
+        # Test 2: Doit avoir du contraste (chiffre blanc sur fond coloré)
+        h, w = region.shape[:2]
+        center_y, center_x = h//2, w//2
+        
+        # Région centrale (chiffre)
+        center_size = max(2, min(h, w) // 4)
+        cy1, cy2 = max(0, center_y-center_size), min(h, center_y+center_size)
+        cx1, cx2 = max(0, center_x-center_size), min(w, center_x+center_size)
+        
+        if cy2 > cy1 and cx2 > cx1:
+            center_brightness = np.mean(color.rgb2gray(region[cy1:cy2, cx1:cx2]))
+            overall_brightness = np.mean(color.rgb2gray(region))
+            
+            contrast = abs(center_brightness - overall_brightness)
+            if contrast < 0.1:  # Pas assez de contraste
+                return False
+        
+        # Test 3: Forme approximativement circulaire
+        if abs(h - w) > max(h, w) * 0.4:  # Trop elliptique
+            return False
+        
+        return True
+    
+    def _smart_validation_analysis(self, color_validation, ocr_result, x, y, r):
+        """
+        Analyse intelligente qui combine couleur et OCR
+        """
+        color_valid = color_validation['is_valid']
+        ocr_valid = ocr_result['is_valid']
+        
+        # Cas 1: Accord parfait couleur + OCR
+        if color_valid and ocr_valid and color_validation['ligne'] == ocr_result['number']:
+            return {
+                'is_valid': True,
+                'final_ligne': color_validation['ligne'],
+                'confidence': min(0.95, color_validation['confidence'] + ocr_result['confidence']) / 2 + 0.2,
+                'method': 'agreement'
+            }
+        
+        # Cas 2: Couleur forte + OCR faible/absent → privilégier couleur
+        if color_valid and color_validation['confidence'] > 0.7 and (not ocr_valid or ocr_result['confidence'] < 0.5):
+            return {
+                'is_valid': True,
+                'final_ligne': color_validation['ligne'],
+                'confidence': color_validation['confidence'],
+                'method': 'color_priority'
+            }
+        
+        # Cas 3: OCR fort + couleur faible/absente → être prudent
+        if ocr_valid and ocr_result['confidence'] > 0.8 and (not color_valid or color_validation['confidence'] < 0.4):
+            # Extra validation: vérifier que c'est vraiment dans un cercle coloré
+            region_check = self._verify_colored_circle_region(x, y, r)
+            if region_check:
+                return {
+                    'is_valid': True,
+                    'final_ligne': ocr_result['number'],
+                    'confidence': ocr_result['confidence'] * 0.8,  # Pénalité car pas de couleur
+                    'method': 'ocr_priority'
+                }
+        
+        # Cas 4: Conflit couleur vs OCR → arbitrage
+        if color_valid and ocr_valid and color_validation['ligne'] != ocr_result['number']:
+            # Privilégier le plus confiant, mais avec pénalité pour conflit
+            if color_validation['confidence'] > ocr_result['confidence'] + 0.2:
+                return {
+                    'is_valid': True,
+                    'final_ligne': color_validation['ligne'],
+                    'confidence': color_validation['confidence'] * 0.7,  # Pénalité conflit
+                    'method': 'fallback'
+                }
+            elif ocr_result['confidence'] > color_validation['confidence'] + 0.2:
+                return {
+                    'is_valid': True,
+                    'final_ligne': ocr_result['number'],
+                    'confidence': ocr_result['confidence'] * 0.7,  # Pénalité conflit
+                    'method': 'fallback'
+                }
+        
+        # Cas 5: Rien de fiable → rejeter
+        return {'is_valid': False, 'final_ligne': None, 'confidence': 0, 'method': 'rejected'}
+    
+    def _verify_colored_circle_region(self, x, y, r):
+        """
+        Vérification rapide qu'on est bien dans une région circulaire colorée
+        """
+        # Cette méthode nécessiterait l'accès à l'image, 
+        # pour l'instant on retourne True par défaut
+        return True
+    
+    def _smart_duplicate_removal(self, candidates):
+        """
+        Suppression intelligente des doublons
+        """
+        if not candidates:
+            return candidates
+        
+        # Trier par confiance décroissante
+        candidates_sorted = sorted(candidates, key=lambda c: c['confidence'], reverse=True)
+        
+        final_detections = []
+        
+        for candidate in candidates_sorted:
+            x1, y1 = candidate['center']
+            
+            # Vérifier si une détection similaire existe déjà
+            is_duplicate = False
+            for existing in final_detections:
+                x2, y2 = existing['center']
+                distance = np.sqrt((x1-x2)**2 + (y1-y2)**2)
+                
+                # Si cercles proches
+                if distance < 35:
+                    # Si même ligne, garder le plus confiant (déjà fait par le tri)
+                    if existing['ligne'] == candidate['ligne']:
+                        is_duplicate = True
+                        break
+                    # Si lignes différentes, garder les deux seulement si très confiants
+                    elif candidate['confidence'] < 0.8 or existing['confidence'] < 0.8:
+                        is_duplicate = True
+                        break
+            
+            if not is_duplicate:
+                final_detections.append(candidate)
+        
+        return final_detections
+    
+    def _quick_ocr_filter(self, image, x, y, r):
+        """
+        OCR rapide et efficace pour filtrer les non-métro (RER, M, lettres)
+        """
+        # Extraire région centrale avec marge généreuse
+        center_size = max(10, int(r * 0.8))  # Zone large pour capturer le contenu
+        x1, x2 = max(0, x - center_size), min(image.shape[1], x + center_size)
+        y1, y2 = max(0, y - center_size), min(image.shape[0], y + center_size)
+        
+        if x2 <= x1 or y2 <= y1:
+            return {'is_metro_number': False, 'number': None, 'confidence': 0}
+        
+        center_region = image[y1:y2, x1:x2]
+        
+        try:
+            # Préparation OCR simple mais efficace
+            h, w = center_region.shape[:2]
+            
+            # Redimensionner pour OCR optimal
+            scale_factor = max(1, 50 // min(h, w))
+            resized = cv2.resize((center_region * 255).astype(np.uint8), 
+                               (w * scale_factor, h * scale_factor))
+            
+            # Convertir en gris
+            gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY) if len(resized.shape) == 3 else resized
+            
+            # Binarisation adaptative (marche bien pour texte blanc sur couleur)
+            binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                         cv2.THRESH_BINARY, 11, 2)
+            
+            # Nettoyer légèrement
+            kernel = np.ones((2,2), np.uint8)
+            cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+            
+            # OCR avec configuration mixte (chiffres + lettres pour détecter RER/M)
+            config = '--oem 3 --psm 8'  # Pas de whitelist pour capturer tout
+            text = pytesseract.image_to_string(cleaned, config=config).strip()
+            
+            # Analyser le résultat
+            if not text:
+                return {'is_metro_number': False, 'number': None, 'confidence': 0, 'rejected_text': 'vide'}
+            
+            # Nettoyer le texte (enlever espaces, caractères parasites)
+            clean_text = ''.join(c for c in text if c.isalnum()).upper()
+            
+            # Cas spéciaux à rejeter explicitement
+            reject_patterns = ['RER', 'M', 'A', 'B', 'C', 'D', 'E', 'N', 'U', 'H', 'K', 'L', 'P', 'R', 'T']
+            if clean_text in reject_patterns:
+                return {'is_metro_number': False, 'number': None, 'confidence': 0, 'rejected_text': clean_text}
+            
+            # Chercher un numéro dans le texte
+            numbers_found = []
+            for char in clean_text:
+                if char.isdigit():
+                    numbers_found.append(char)
+            
+            if numbers_found:
+                # Reconstruire le numéro
+                number_str = ''.join(numbers_found)
+                if number_str.isdigit() and len(number_str) <= 2:
+                    number = int(number_str)
+                    if 1 <= number <= 14:  # Ligne métro valide
+                        # Confiance basée sur la "propreté" du résultat
+                        confidence = 0.9 if clean_text == number_str else 0.7
+                        return {'is_metro_number': True, 'number': number, 'confidence': confidence}
+            
+            # Si arrive ici, pas un numéro métro valide
+            return {'is_metro_number': False, 'number': None, 'confidence': 0, 'rejected_text': clean_text}
+            
+        except Exception as e:
+            return {'is_metro_number': False, 'number': None, 'confidence': 0, 'rejected_text': 'erreur'}
+    
+    def _detect_circles(self, image):
+        """
+        Détection de cercles équilibrée - ni trop strict ni trop permissif
+        """
+        # Convertir en niveaux de gris
+        gray = color.rgb2gray(image)
+        gray_uint8 = (gray * 255).astype(np.uint8)
+        
+        # Prétraitement modéré
+        gray_blurred = cv2.medianBlur(gray_uint8, 5)
+        
+        # Configuration équilibrée
+        configurations = [
+            # Configuration principale
+            {'dp': 1, 'minDist': 25, 'param1': 60, 'param2': 35, 'minRadius': 14, 'maxRadius': 60},
+            # Configuration backup
+            {'dp': 1, 'minDist': 20, 'param1': 50, 'param2': 30, 'minRadius': 12, 'maxRadius': 65}
+        ]
+        
+        all_circles = []
+        
+        for config in configurations:
+            circles = cv2.HoughCircles(
+                gray_blurred,
+                cv2.HOUGH_GRADIENT,
+                dp=config['dp'],
+                minDist=config['minDist'],
+                param1=config['param1'],
+                param2=config['param2'],
+                minRadius=config['minRadius'],
+                maxRadius=config['maxRadius']
+            )
+            
+            if circles is not None:
+                circles = np.round(circles[0, :]).astype("int")
+                for x, y, r in circles:
+                    # Filtrage basique
+                    h, w = image.shape[:2]
+                    margin = 15
+                    if (margin < x < w-margin and margin < y < h-margin and 
+                        12 <= r <= 65):
+                        all_circles.append((x, y, r))
+        
+        # Fusionner les cercles similaires
+        unique_circles = self._merge_similar_circles(all_circles)
+        
+        # Limiter raisonnablement
+        if len(unique_circles) > 30:
+            print(f"⚠️ Beaucoup de candidats ({len(unique_circles)}), tri par qualité...")
+            scored_circles = []
+            for x, y, r in unique_circles:
+                score = self._simple_quality_score(image, x, y, r)
+                scored_circles.append((x, y, r, score))
+            
+            scored_circles.sort(key=lambda item: item[3], reverse=True)
+            unique_circles = [(x, y, r) for x, y, r, _ in scored_circles[:25]]
+        
+        return unique_circles
+    
+    def _is_thick_border_metro_sign(self, image, x, y, r):
+        """
+        Test strict pour bordure épaisse caractéristique des signes métro
+        (exclut RER, M, et autres symboles à bordure fine)
+        """
+        # Extraire région
+        margin = 5
+        x1, x2 = max(0, x-r-margin), min(image.shape[1], x+r+margin)
+        y1, y2 = max(0, y-r-margin), min(image.shape[0], y+r+margin)
+        
+        if x2 <= x1 or y2 <= y1:
+            return False
+            
+        region = image[y1:y2, x1:x2]
+        h, w = region.shape[:2]
+        center_y, center_x = h//2, w//2
+        
+        # Test 1: Analyser l'épaisseur de la bordure colorée
+        border_thickness = self._measure_border_thickness(region, center_x, center_y, r)
+        
+        # Test 2: Homogénéité de couleur sur la bordure
+        border_homogeneity = self._measure_border_color_homogeneity(region, center_x, center_y, r)
+        
+        # Test 3: Contraste centre/bordure (chiffre blanc vs fond coloré)
+        center_contrast = self._measure_center_contrast(region, center_x, center_y, r)
+        
+        # Critères stricts pour signe métro
+        is_thick_enough = border_thickness > 0.25  # Au moins 25% du rayon
+        is_homogeneous = border_homogeneity > 0.7   # Couleur uniforme
+        has_contrast = center_contrast > 0.3        # Centre plus clair
+        
+        return is_thick_enough and is_homogeneous and has_contrast
+    
+    def _measure_border_thickness(self, region, center_x, center_y, r):
+        """
+        Mesure l'épaisseur relative de la bordure colorée
+        """
+        # Échantillonner sur plusieurs rayons pour mesurer où la couleur change
+        angles = np.linspace(0, 2*np.pi, 16)
+        thickness_measurements = []
+        
+        for angle in angles:
+            # Tracer une ligne du centre vers l'extérieur
+            max_dist = int(r * 1.2)
+            line_pixels = []
+            
+            for dist in range(5, max_dist, 2):
+                px = int(center_x + dist * np.cos(angle))
+                py = int(center_y + dist * np.sin(angle))
+                
+                if 0 <= px < region.shape[1] and 0 <= py < region.shape[0]:
+                    line_pixels.append((region[py, px], dist))
+            
+            if len(line_pixels) > 5:
+                # Analyser où la couleur devient "fond" (moins saturée)
+                hsv_pixels = color.rgb2hsv(np.array([p[0] for p in line_pixels]).reshape(1, -1, 3))[0]
+                saturations = hsv_pixels[:, 1]
+                
+                # Trouver la transition couleur saturée → fond
+                high_sat_count = np.sum(saturations > 0.3)
+                total_count = len(saturations)
+                
+                if total_count > 0:
+                    thickness_ratio = high_sat_count / total_count
+                    thickness_measurements.append(thickness_ratio)
+        
+        return np.mean(thickness_measurements) if thickness_measurements else 0
+    
+    def _measure_border_color_homogeneity(self, region, center_x, center_y, r):
+        """
+        Mesure l'homogénéité de couleur sur la bordure
+        """
+        # Échantillonner la bordure sur un anneau
+        border_pixels = self._sample_ring(region, center_x, center_y, r*0.7, r*0.9)
+        
+        if len(border_pixels) < 8:
+            return 0
+        
+        border_colors = np.array(border_pixels)
+        
+        # Calculer la variance de couleur sur la bordure
+        color_std = np.mean(np.std(border_colors, axis=0))
+        
+        # Homogénéité = 1 - variance normalisée
+        homogeneity = max(0, 1 - color_std * 4)  # Facteur 4 pour normaliser
+        
+        return homogeneity
+    
+    def _measure_center_contrast(self, region, center_x, center_y, r):
+        """
+        Mesure le contraste entre le centre (chiffre) et la bordure
+        """
+        # Région centrale (chiffre)
+        center_size = max(3, r // 3)
+        cx1, cx2 = max(0, center_x - center_size), min(region.shape[1], center_x + center_size)
+        cy1, cy2 = max(0, center_y - center_size), min(region.shape[0], center_y + center_size)
+        
+        if cx2 <= cx1 or cy2 <= cy1:
+            return 0
+            
+        center_region = region[cy1:cy2, cx1:cx2]
+        center_brightness = np.mean(color.rgb2gray(center_region))
+        
+        # Bordure colorée
+        border_pixels = self._sample_ring(region, center_x, center_y, r*0.7, r*0.9)
+        if len(border_pixels) < 5:
+            return 0
+            
+        border_brightness = np.mean(color.rgb2gray(np.array(border_pixels)))
+        
+        # Contraste = différence de luminosité
+        contrast = abs(center_brightness - border_brightness)
+        
+        return contrast
+    
+    def _validate_metro_number_strict(self, image, x, y, r):
+        """
+        Validation OCR stricte pour numéros de métro (1-14 seulement)
+        """
+        # Extraire région centrale optimisée pour OCR
+        center_size = max(8, int(r * 0.6))  # Zone centrale plus large
+        x1, x2 = max(0, x - center_size), min(image.shape[1], x + center_size)
+        y1, y2 = max(0, y - center_size), min(image.shape[0], y + center_size)
+        
+        if x2 <= x1 or y2 <= y1:
+            return {'is_valid': False, 'number': None, 'confidence': 0}
+        
+        center_region = image[y1:y2, x1:x2]
+        
+        try:
+            # Préparation OCR optimisée
+            # 1. Redimensionner pour meilleure reconnaissance
+            h, w = center_region.shape[:2]
+            scale_factor = max(2, 60 // min(h, w))  # Minimum 60px
+            resized = cv2.resize((center_region * 255).astype(np.uint8), 
+                               (w * scale_factor, h * scale_factor))
+            
+            # 2. Convertir en gris
+            gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY) if len(resized.shape) == 3 else resized
+            
+            # 3. Binarisation pour isoler chiffre blanc sur fond coloré
+            # Essayer plusieurs méthodes
+            methods = [
+                cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+                cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2),
+                cv2.threshold(gray, np.mean(gray) + np.std(gray), 255, cv2.THRESH_BINARY)[1]
+            ]
+            
+            detected_numbers = []
+            
+            for method_idx, binary in enumerate(methods):
+                # Nettoyer avec morphologie
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+                cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+                
+                # OCR avec configuration stricte pour chiffres
+                config = '--oem 3 --psm 8 -c tessedit_char_whitelist=0123456789'
+                text = pytesseract.image_to_string(cleaned, config=config).strip()
+                
+                # Parser et valider
+                if text.isdigit() and len(text) <= 2:
+                    number = int(text)
+                    if 1 <= number <= 14:  # Seulement lignes métro valides
+                        confidence = 0.9 - (method_idx * 0.1)  # Première méthode = meilleure
+                        detected_numbers.append((number, confidence))
+            
+            # Retourner le meilleur résultat
+            if detected_numbers:
+                # Trier par confiance et prendre le meilleur
+                detected_numbers.sort(key=lambda x: x[1], reverse=True)
+                best_number, best_conf = detected_numbers[0]
+                
+                return {'is_valid': True, 'number': best_number, 'confidence': best_conf}
+            
+        except Exception as e:
+            if False:  # Debug
+                print(f"OCR error: {e}")
+        
+        return {'is_valid': False, 'number': None, 'confidence': 0}
+    
+    def _validate_by_number(self, image, candidate):
+        """
+        Valide un candidat en essayant de détecter le numéro au centre
+        """
+        x, y, r = candidate['center'][0], candidate['center'][1], candidate['radius']
+        
+        # Extraire la région centrale (où devrait être le numéro)
+        center_size = max(8, r // 2)  # Région centrale adaptée au rayon
+        x1, x2 = max(0, x - center_size), min(image.shape[1], x + center_size)
+        y1, y2 = max(0, y - center_size), min(image.shape[0], y + center_size)
+        
+        if x2 <= x1 or y2 <= y1:
+            return {'is_valid': False, 'confidence': 0}
+        
+        center_region = image[y1:y2, x1:x2]
+        
+        # Essayer plusieurs méthodes de détection du numéro
+        detected_numbers = []
+        
+        # Méthode 1: OCR direct
+        ocr_result = self._extract_number_ocr(center_region)
+        if ocr_result['number'] is not None:
+            detected_numbers.append(('ocr', ocr_result['number'], ocr_result['confidence']))
+        
+        # Méthode 2: Template matching pour chiffres courants
+        template_result = self._extract_number_template(center_region)
+        if template_result['number'] is not None:
+            detected_numbers.append(('template', template_result['number'], template_result['confidence']))
+        
+        # Méthode 3: Analyse morphologique pour certains cas
+        morph_result = self._extract_number_morphology(center_region)
+        if morph_result['number'] is not None:
+            detected_numbers.append(('morphology', morph_result['number'], morph_result['confidence']))
+        
+        # Choisir le meilleur résultat
+        if detected_numbers:
+            # Trier par confiance
+            detected_numbers.sort(key=lambda x: x[2], reverse=True)
+            best_method, best_number, best_conf = detected_numbers[0]
+            
+            # Valider que c'est un numéro de ligne valide
+            if best_number in range(1, 15):  # Lignes 1-14
+                return {
+                    'is_valid': True,
+                    'detected_number': best_number,
+                    'confidence': best_conf,
+                    'method': best_method
+                }
+        
+        return {'is_valid': False, 'confidence': 0}
+    
+    def _extract_number_ocr(self, region):
+        """
+        Extraction du numéro par OCR (Tesseract)
+        """
+        try:
+            # Préparation de l'image pour OCR
+            # 1. Redimensionner pour améliorer la reconnaissance
+            h, w = region.shape[:2]
+            scale_factor = max(1, 40 // min(h, w))  # Minimum 40px
+            resized = cv2.resize((region * 255).astype(np.uint8), 
+                               (w * scale_factor, h * scale_factor))
+            
+            # 2. Convertir en niveaux de gris
+            if len(resized.shape) == 3:
+                gray = cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = resized
+            
+            # 3. Binarisation adaptative pour isoler le texte blanc
+            binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                         cv2.THRESH_BINARY, 11, 2)
+            
+            # 4. Morphologie pour nettoyer
+            kernel = np.ones((2,2), np.uint8)
+            cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+            
+            # 5. OCR avec configuration pour chiffres
+            config = '--oem 3 --psm 10 -c tessedit_char_whitelist=0123456789'
+            text = pytesseract.image_to_string(cleaned, config=config).strip()
+            
+            # 6. Parser le résultat
+            if text.isdigit() and len(text) <= 2:
+                number = int(text)
+                if 1 <= number <= 14:
+                    return {'number': number, 'confidence': 0.8}
+            
+        except Exception as e:
+            pass
+        
+        return {'number': None, 'confidence': 0}
+    
+    def _extract_number_template(self, region):
+        """
+        Extraction par template matching pour chiffres 1, 4, 7, 11, 12, 14
+        """
+        # Cette méthode nécessiterait des templates pré-créés
+        # Pour l'instant, implémentation simplifiée
+        
+        # Convertir en gris et binariser
+        gray = color.rgb2gray(region)
+        binary = gray > np.mean(gray)  # Seuillage simple
+        
+        # Analyse des formes simples
+        # Chiffre 1: vertical dominant
+        # Chiffre 4: forme en L
+        # Chiffre 7: horizontal + diagonal
+        # etc.
+        
+        # Implémentation basique pour quelques cas évidents
+        h, w = binary.shape
+        
+        # Compter les pixels blancs par ligne et colonne
+        row_sums = np.sum(binary, axis=1)
+        col_sums = np.sum(binary, axis=0)
+        
+        # Heuristiques simples
+        # Chiffre 1: colonne centrale dominante
+        if w > 0:
+            center_col_ratio = col_sums[w//2] / np.max(col_sums) if np.max(col_sums) > 0 else 0
+            if center_col_ratio > 0.7 and np.sum(col_sums > np.max(col_sums)*0.3) <= 3:
+                return {'number': 1, 'confidence': 0.6}
+        
+        # Pour l'instant, retourner échec - cette méthode nécessite plus de développement
+        return {'number': None, 'confidence': 0}
+    
+    def _extract_number_morphology(self, region):
+        """
+        Analyse morphologique basique des formes
+        """
+        # Convertir et binariser
+        gray = color.rgb2gray(region)
+        # Inverser: chercher les pixels clairs (chiffre blanc)
+        binary = gray > (np.mean(gray) + np.std(gray) * 0.5)
+        
+        if np.sum(binary) < 5:  # Pas assez de pixels blancs
+            return {'number': None, 'confidence': 0}
+        
+        # Analyse des composantes connexes
+        labeled, num_features = ndimage.label(binary)
+        
+        if num_features == 0:
+            return {'number': None, 'confidence': 0}
+        
+        # Analyser la plus grande composante (probablement le chiffre)
+        sizes = ndimage.sum(binary, labeled, range(1, num_features + 1))
+        largest_idx = np.argmax(sizes) + 1
+        main_component = (labeled == largest_idx)
+        
+        # Heuristiques basées sur la forme
+        h, w = main_component.shape
+        component_h = np.sum(np.any(main_component, axis=1))
+        component_w = np.sum(np.any(main_component, axis=0))
+        
+        aspect_ratio = component_h / component_w if component_w > 0 else 0
+        
+        # Chiffre 1: aspect ratio élevé, centré
+        if aspect_ratio > 2 and component_w < w * 0.7:
+            return {'number': 1, 'confidence': 0.5}
+        
+        return {'number': None, 'confidence': 0}
+    
+    def _resolve_color_number_conflict(self, color_ligne, detected_number, color_conf, number_conf):
+        """
+        Résout les conflits entre détection couleur et numéro
+        """
+        # Si les deux s'accordent, parfait
+        if color_ligne == detected_number:
+            return color_ligne
+        
+        # Si conflit, privilégier le plus fiable
+        if number_conf > color_conf + 0.2:  # Numéro significativement plus fiable
+            return detected_number
+        elif color_conf > number_conf + 0.2:  # Couleur significativement plus fiable
+            return color_ligne
+        else:
+            # En cas d'égalité, privilégier la couleur (plus robuste en général)
+            return color_ligne
     
     def _detect_circles(self, image):
         """
