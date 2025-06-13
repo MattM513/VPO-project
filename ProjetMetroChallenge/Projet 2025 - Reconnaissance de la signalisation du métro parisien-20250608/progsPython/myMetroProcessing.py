@@ -128,7 +128,7 @@ class ImprovedMetroSystem:
     
     def _learn_line_color(self, ligne, color_samples):
         """
-        Apprend la couleur moyenne et la tolérance pour une ligne
+        Apprend la couleur moyenne et la tolérance pour une ligne - Version équilibrée
         """
         colors_array = np.array(color_samples)
         
@@ -139,9 +139,9 @@ class ImprovedMetroSystem:
         std_color = np.std(colors_array, axis=0)
         variation = np.mean(std_color)
         
-        # Tolérance beaucoup plus stricte pour éviter les confusions
-        base_tolerance = 0.08  # Réduit de 0.15 à 0.08
-        adaptive_tolerance = min(0.15, base_tolerance + variation * 1.5)  # Max 0.15 au lieu de 0.35
+        # Tolérance équilibrée - ni trop stricte ni trop permissive
+        base_tolerance = 0.12  # Base raisonnable
+        adaptive_tolerance = min(0.25, base_tolerance + variation * 2)  # Plafond à 0.25
         
         self.learned_colors[ligne] = mean_color
         self.color_tolerances[ligne] = adaptive_tolerance
@@ -157,23 +157,23 @@ class ImprovedMetroSystem:
     
     def detect_metro_signs(self, image, debug=True):
         """
-        Détecte les signes de métro dans une image
+        Détecte les signes de métro avec approche équilibrée
         """
         if debug:
             print(f"🔍 DÉTECTION AVEC SYSTÈME {'ENTRAÎNÉ' if self.is_trained else 'THÉORIQUE'}")
         
-        # 1. Détection des cercles candidats
+        # 1. Détection des cercles candidats avec approche équilibrée
         circles = self._detect_circles(image)
         if debug:
-            print(f"   Cercles après filtrage: {len(circles)}")
+            print(f"   Cercles candidats: {len(circles)}")
         
         if not circles:
             return []
         
-        # 2. Validation par couleur avec seuil plus strict
+        # 2. Validation par couleur avec seuils équilibrés
         valid_detections = []
         colors_to_use = self.learned_colors if self.is_trained else self.theoretical_colors
-        tolerances_to_use = self.color_tolerances if self.is_trained else {l: 0.12 for l in colors_to_use}
+        tolerances_to_use = self.color_tolerances if self.is_trained else {l: 0.18 for l in colors_to_use}
         
         for i, (x, y, r) in enumerate(circles):
             validation = self._validate_circle_by_color(image, x, y, r, colors_to_use, tolerances_to_use)
@@ -204,29 +204,28 @@ class ImprovedMetroSystem:
     
     def _detect_circles(self, image):
         """
-        Détecte les cercles dans l'image avec HoughCircles optimisé
+        Détecte les cercles avec approche équilibrée (ni trop strict, ni trop permissif)
         """
         # Convertir en niveaux de gris
         gray = color.rgb2gray(image)
         gray_uint8 = (gray * 255).astype(np.uint8)
         
-        # Prétraitement plus agressif
+        # Prétraitement modéré
         gray_blurred = cv2.medianBlur(gray_uint8, 5)
-        gray_enhanced = cv2.equalizeHist(gray_blurred)
         
-        # Configuration plus stricte pour réduire les faux positifs
+        # Configuration équilibrée - plus permissive que l'ultra-strict
         configurations = [
-            # Configuration très stricte - priorité qualité
-            {'dp': 1, 'minDist': 50, 'param1': 80, 'param2': 60, 'minRadius': 20, 'maxRadius': 50},
-            # Configuration stricte
-            {'dp': 1, 'minDist': 40, 'param1': 70, 'param2': 50, 'minRadius': 18, 'maxRadius': 55}
+            # Configuration principale - équilibrée
+            {'dp': 1, 'minDist': 30, 'param1': 60, 'param2': 40, 'minRadius': 16, 'maxRadius': 55},
+            # Configuration backup - un peu plus permissive
+            {'dp': 1, 'minDist': 25, 'param1': 50, 'param2': 35, 'minRadius': 14, 'maxRadius': 60}
         ]
         
         all_circles = []
         
         for config in configurations:
             circles = cv2.HoughCircles(
-                gray_enhanced,
+                gray_blurred,
                 cv2.HOUGH_GRADIENT,
                 dp=config['dp'],
                 minDist=config['minDist'],
@@ -239,39 +238,37 @@ class ImprovedMetroSystem:
             if circles is not None:
                 circles = np.round(circles[0, :]).astype("int")
                 for x, y, r in circles:
-                    # Filtrer les cercles trop près des bords et validation taille
+                    # Filtrage basique seulement
                     h, w = image.shape[:2]
-                    margin = 30
+                    margin = 20
                     if (margin < x < w-margin and margin < y < h-margin and 
-                        18 <= r <= 55):  # Taille cohérente pour signes métro
+                        14 <= r <= 60):
                         
-                        # Validation supplémentaire: vérifier que c'est bien un cercle coloré
-                        if self._validate_circle_shape(image, x, y, r):
+                        # Validation légère - juste s'assurer que c'est coloré
+                        if self._basic_color_validation(image, x, y, r):
                             all_circles.append((x, y, r))
         
         # Fusionner les cercles similaires
         unique_circles = self._merge_similar_circles(all_circles)
         
-        # Limiter le nombre de cercles pour éviter l'explosion
-        if len(unique_circles) > 50:
-            print(f"⚠️ Trop de cercles détectés ({len(unique_circles)}), filtrage renforcé...")
-            # Garder seulement les plus "ronds" et bien définis
+        # Limiter raisonnablement (pas trop strict)
+        if len(unique_circles) > 25:
+            print(f"⚠️ Beaucoup de candidats ({len(unique_circles)}), tri par qualité...")
             scored_circles = []
             for x, y, r in unique_circles:
-                score = self._score_circle_quality(image, x, y, r)
+                score = self._simple_quality_score(image, x, y, r)
                 scored_circles.append((x, y, r, score))
             
-            # Trier par qualité et garder les 30 meilleurs
             scored_circles.sort(key=lambda item: item[3], reverse=True)
-            unique_circles = [(x, y, r) for x, y, r, _ in scored_circles[:30]]
+            unique_circles = [(x, y, r) for x, y, r, _ in scored_circles[:20]]
         
         return unique_circles
     
-    def _validate_circle_shape(self, image, x, y, r):
+    def _basic_color_validation(self, image, x, y, r):
         """
-        Valide qu'un cercle détecté a bien une forme et couleur cohérente
+        Validation basique - juste vérifier qu'il y a de la couleur
         """
-        # Extraire la région du cercle
+        # Extraire région
         margin = 5
         x1, x2 = max(0, x-r-margin), min(image.shape[1], x+r+margin)
         y1, y2 = max(0, y-r-margin), min(image.shape[0], y+r+margin)
@@ -281,15 +278,210 @@ class ImprovedMetroSystem:
             
         region = image[y1:y2, x1:x2]
         
-        # Vérifier qu'il y a suffisamment de couleur (pas juste du blanc/gris)
+        # Simple test: il faut au moins 15% de pixels avec un minimum de couleur
         hsv_region = color.rgb2hsv(region)
         saturation = hsv_region[:, :, 1]
         
-        # Au moins 20% de pixels avec saturation > 0.15
-        colorful_pixels = np.sum(saturation > 0.15)
+        colorful_pixels = np.sum(saturation > 0.1)  # Seuil très bas
         total_pixels = saturation.size
         
-        return (colorful_pixels / total_pixels) > 0.2
+        return (colorful_pixels / total_pixels) > 0.15
+    
+    def _simple_quality_score(self, image, x, y, r):
+        """
+        Score simple pour trier les cercles
+        """
+        margin = 3
+        x1, x2 = max(0, x-r-margin), min(image.shape[1], x+r+margin)
+        y1, y2 = max(0, y-r-margin), min(image.shape[0], y+r+margin)
+        
+        if x2 <= x1 or y2 <= y1:
+            return 0
+            
+        region = image[y1:y2, x1:x2]
+        h, w = region.shape[:2]
+        
+        score = 0
+        
+        # 1. Saturation moyenne (plus coloré = mieux)
+        hsv_region = color.rgb2hsv(region)
+        avg_saturation = np.mean(hsv_region[:, :, 1])
+        score += avg_saturation * 3
+        
+        # 2. Circularité basique
+        circularity = 1.0 - abs(h - w) / max(h, w)
+        score += circularity * 2
+        
+        # 3. Taille raisonnable (ni trop petit ni trop grand)
+        size_score = 1.0 - abs(r - 30) / 30  # Optimal autour de 30px
+        score += max(0, size_score)
+        
+        return score
+    
+    def _validate_metro_sign_candidate(self, image, x, y, r):
+        """
+        Validation spécifique pour candidat signe métro (bordure épaisse colorée)
+        """
+        # Extraire région
+        margin = 8
+        x1, x2 = max(0, x-r-margin), min(image.shape[1], x+r+margin)
+        y1, y2 = max(0, y-r-margin), min(image.shape[0], y+r+margin)
+        
+        if x2 <= x1 or y2 <= y1:
+            return False
+            
+        region = image[y1:y2, x1:x2]
+        h, w = region.shape[:2]
+        center_y, center_x = h//2, w//2
+        
+        # Test 1: Bordure épaisse colorée
+        if not self._has_thick_colored_border(region, center_x, center_y, r):
+            return False
+        
+        # Test 2: Ratio de circularité (éviter les ellipses)
+        if abs(h - w) > min(h, w) * 0.3:  # Trop elliptique
+            return False
+        
+        # Test 3: Densité de couleur suffisante
+        hsv_region = color.rgb2hsv(region)
+        saturation = hsv_region[:, :, 1]
+        colorful_ratio = np.sum(saturation > 0.2) / saturation.size
+        
+        return colorful_ratio > 0.3  # Au moins 30% de pixels colorés
+    
+    def _score_metro_sign_quality(self, image, x, y, r):
+        """
+        Score spécifique pour la qualité d'un signe métro
+        """
+        margin = 5
+        x1, x2 = max(0, x-r-margin), min(image.shape[1], x+r+margin)
+        y1, y2 = max(0, y-r-margin), min(image.shape[0], y+r+margin)
+        
+        if x2 <= x1 or y2 <= y1:
+            return 0
+            
+        region = image[y1:y2, x1:x2]
+        h, w = region.shape[:2]
+        center_y, center_x = h//2, w//2
+        
+        score = 0
+        
+        # 1. Score bordure épaisse (40% du score)
+        if self._has_thick_colored_border(region, center_x, center_y, r):
+            score += 4.0
+        
+        # 2. Score circularité (20% du score)
+        circularity = 1.0 - abs(h - w) / max(h, w)
+        score += circularity * 2.0
+        
+        # 3. Score saturation (25% du score)
+        hsv_region = color.rgb2hsv(region)
+        avg_saturation = np.mean(hsv_region[:, :, 1])
+        score += avg_saturation * 2.5
+        
+        # 4. Score contraste centre/bordure (15% du score)
+        # Centre doit être plus clair (chiffre blanc)
+        center_region = region[center_y-r//3:center_y+r//3, center_x-r//3:center_x+r//3]
+        if center_region.size > 0:
+            center_brightness = np.mean(color.rgb2gray(center_region))
+            border_pixels = self._sample_ring(region, center_x, center_y, r*0.7, r*0.9)
+            if border_pixels:
+                border_brightness = np.mean(color.rgb2gray(np.array(border_pixels)))
+                contrast = center_brightness - border_brightness
+                score += max(0, contrast) * 1.5
+        
+        return score
+    
+    def _validate_circle_shape(self, image, x, y, r):
+        """
+        Valide qu'un cercle détecté a bien une forme et couleur cohérente + bordure épaisse
+        """
+        # Extraire la région du cercle
+        margin = 8
+        x1, x2 = max(0, x-r-margin), min(image.shape[1], x+r+margin)
+        y1, y2 = max(0, y-r-margin), min(image.shape[0], y+r+margin)
+        
+        if x2 <= x1 or y2 <= y1:
+            return False
+            
+        region = image[y1:y2, x1:x2]
+        h, w = region.shape[:2]
+        center_y, center_x = h//2, w//2
+        
+        # Test 1: Vérifier qu'il y a une bordure épaisse colorée
+        if not self._has_thick_colored_border(region, center_x, center_y, r):
+            return False
+        
+        # Test 2: Vérifier qu'il y a suffisamment de couleur (pas juste du blanc/gris)
+        hsv_region = color.rgb2hsv(region)
+        saturation = hsv_region[:, :, 1]
+        
+        # Au moins 25% de pixels avec saturation > 0.2 (plus strict pour les signes métro)
+        colorful_pixels = np.sum(saturation > 0.2)
+        total_pixels = saturation.size
+        
+        return (colorful_pixels / total_pixels) > 0.25
+    
+    def _has_thick_colored_border(self, region, center_x, center_y, r):
+        """
+        Vérifie qu'il y a une bordure épaisse colorée caractéristique des signes métro
+        """
+        h, w = region.shape[:2]
+        
+        # Analyser plusieurs anneaux concentriques
+        # Anneau externe (bordure du signe)
+        outer_ring = self._sample_ring(region, center_x, center_y, r * 0.85, r * 0.95)
+        # Anneau moyen (milieu de la bordure)  
+        middle_ring = self._sample_ring(region, center_x, center_y, r * 0.7, r * 0.8)
+        # Anneau interne (vers le centre/chiffre)
+        inner_ring = self._sample_ring(region, center_x, center_y, r * 0.4, r * 0.6)
+        
+        if len(outer_ring) < 8 or len(middle_ring) < 8:
+            return False
+        
+        # Convertir en HSV pour analyser
+        outer_hsv = color.rgb2hsv(np.array(outer_ring).reshape(1, -1, 3))[0]
+        middle_hsv = color.rgb2hsv(np.array(middle_ring).reshape(1, -1, 3))[0]
+        
+        # Critères pour une bordure épaisse de signe métro:
+        # 1. Saturation élevée sur la bordure (couleur vive)
+        outer_sat = np.mean(outer_hsv[:, 1])
+        middle_sat = np.mean(middle_hsv[:, 1])
+        
+        # 2. Homogénéité de couleur sur la bordure (même teinte)
+        outer_hue_std = np.std(outer_hsv[:, 0])
+        middle_hue_std = np.std(middle_hsv[:, 0])
+        
+        # 3. Contraste avec le centre (chiffre blanc)
+        if len(inner_ring) > 4:
+            inner_hsv = color.rgb2hsv(np.array(inner_ring).reshape(1, -1, 3))[0]
+            inner_value = np.mean(inner_hsv[:, 2])  # Luminosité
+            border_value = np.mean(middle_hsv[:, 2])
+            value_contrast = abs(inner_value - border_value)
+        else:
+            value_contrast = 0.3  # Valeur par défaut
+        
+        # Critères de validation
+        has_saturated_border = (outer_sat > 0.3 and middle_sat > 0.25)
+        has_homogeneous_color = (outer_hue_std < 0.15 and middle_hue_std < 0.15)
+        has_good_contrast = value_contrast > 0.2
+        
+        return has_saturated_border and has_homogeneous_color and has_good_contrast
+    
+    def _sample_ring(self, region, center_x, center_y, inner_radius, outer_radius):
+        """
+        Échantillonne les pixels dans un anneau entre inner_radius et outer_radius
+        """
+        h, w = region.shape[:2]
+        y_coords, x_coords = np.ogrid[:h, :w]
+        distances = np.sqrt((x_coords - center_x)**2 + (y_coords - center_y)**2)
+        
+        ring_mask = (distances >= inner_radius) & (distances <= outer_radius)
+        
+        if np.any(ring_mask):
+            return region[ring_mask].tolist()
+        else:
+            return []
     
     def _score_circle_quality(self, image, x, y, r):
         """
@@ -382,7 +574,7 @@ class ImprovedMetroSystem:
     
     def _validate_circle_by_color(self, image, x, y, r, colors_dict, tolerances_dict):
         """
-        Valide un cercle en analysant sa couleur dominante avec seuils stricts
+        Validation couleur équilibrée - ni trop stricte ni trop permissive
         """
         # Extraire la région autour du cercle
         margin = 5
@@ -394,8 +586,8 @@ class ImprovedMetroSystem:
         
         region = image[y1:y2, x1:x2]
         
-        # Extraire la couleur dominante avec méthode améliorée
-        dominant_color = self._extract_dominant_color_v2(region)
+        # Extraire couleur avec méthode équilibrée
+        dominant_color = self._extract_balanced_color(region)
         
         # Comparer avec toutes les couleurs de lignes
         best_match = {'ligne': -1, 'confidence': 0.0, 'distance': float('inf')}
@@ -405,10 +597,10 @@ class ImprovedMetroSystem:
             # Distance euclidienne dans l'espace RGB
             color_distance = np.linalg.norm(dominant_color - target_color)
             
-            # Tolérance pour cette ligne
-            tolerance = tolerances_dict.get(ligne, 0.12)
+            # Tolérance ajustée - plus permissive que le mode ultra-strict
+            tolerance = tolerances_dict.get(ligne, 0.15) + 0.05  # Ajouter 0.05 de marge
             
-            # Score de confiance (1.0 = parfait, 0.0 = trop loin)
+            # Score de confiance
             if color_distance < tolerance:
                 confidence = max(0, 1.0 - (color_distance / tolerance))
                 
@@ -422,13 +614,13 @@ class ImprovedMetroSystem:
                 elif color_distance < second_best_distance:
                     second_best_distance = color_distance
         
-        # Validation renforcée:
-        # 1. Confiance minimale plus stricte
-        # 2. La meilleure correspondance doit être significativement meilleure que la 2ème
+        # Validation plus permissive:
+        # 1. Confiance moins stricte
+        # 2. Discrimination moins exigeante
         discrimination_ratio = second_best_distance / best_match['distance'] if best_match['distance'] > 0 else float('inf')
         
-        is_valid = (best_match['confidence'] > 0.6 and  # Confiance plus stricte
-                   discrimination_ratio > 1.3)  # La meilleure doit être 30% meilleure que la 2ème
+        is_valid = (best_match['confidence'] > 0.4 and  # Confiance modérée (était 0.6)
+                   discrimination_ratio > 1.1)  # Discrimination plus souple (était 1.3)
         
         result = {
             'is_valid': is_valid,
@@ -440,57 +632,135 @@ class ImprovedMetroSystem:
         
         return result
     
-    def _extract_dominant_color_v2(self, region):
+    def _extract_balanced_color(self, region):
         """
-        Version améliorée d'extraction de couleur dominante
+        Extraction couleur équilibrée - compromise entre précision et robustesse
         """
         h, w = region.shape[:2]
         
-        # Méthode 1: Filtrer par saturation (prioritaire)
+        # Méthode 1: Focus sur les pixels moyennement saturés (pas blanc, pas noir)
         hsv_region = color.rgb2hsv(region)
         saturation = hsv_region[:, :, 1]
         value = hsv_region[:, :, 2]
         
-        # Masque pour pixels colorés (pas blanc/gris)
-        colored_mask = (saturation > 0.25) & (value < 0.85) & (value > 0.15)
+        # Masque pour pixels colorés mais pas extrêmes
+        good_mask = (saturation > 0.15) & (value > 0.1) & (value < 0.9)
         
-        if np.sum(colored_mask) > region.size * 0.1:  # Au moins 10% de pixels colorés
-            colored_pixels = region[colored_mask]
+        if np.sum(good_mask) > region.size * 0.1:  # Au moins 10% de bons pixels
+            good_pixels = region[good_mask]
             
-            # Clustering pour trouver la couleur dominante
-            if len(colored_pixels) > 10:
+            # Si assez de pixels, faire un clustering simple
+            if len(good_pixels) > 15:
                 try:
-                    kmeans = KMeans(n_clusters=min(3, len(colored_pixels)//5), 
+                    kmeans = KMeans(n_clusters=min(2, len(good_pixels)//10), 
                                   random_state=42, n_init=10)
-                    kmeans.fit(colored_pixels)
+                    kmeans.fit(good_pixels)
                     
                     # Prendre le cluster le plus saturé
                     cluster_colors = kmeans.cluster_centers_
                     cluster_hsv = color.rgb2hsv(cluster_colors.reshape(1, -1, 3))[0]
                     
-                    # Choisir le cluster avec la plus haute saturation
                     best_cluster_idx = np.argmax(cluster_hsv[:, 1])
                     return cluster_colors[best_cluster_idx]
                 except:
                     pass
             
-            # Fallback: moyenne des pixels colorés
-            return np.mean(colored_pixels, axis=0)
+            # Fallback: moyenne des bons pixels
+            return np.mean(good_pixels, axis=0)
         
-        # Méthode 2: Anneau externe si pas assez de pixels colorés
+        # Méthode 2: Bordure externe si pas assez de pixels colorés
         center_y, center_x = h//2, w//2
         radius = min(h, w) // 2
         
-        # Créer un masque annulaire
-        y_coords, x_coords = np.ogrid[:h, :w]
-        distances = np.sqrt((x_coords - center_x)**2 + (y_coords - center_y)**2)
-        ring_mask = (distances >= radius * 0.6) & (distances <= radius * 0.9)
+        # Échantillonner le contour externe
+        border_pixels = self._sample_ring(region, center_x, center_y, radius*0.6, radius*0.9)
         
-        if np.any(ring_mask):
-            ring_pixels = region[ring_mask]
-            return np.mean(ring_pixels, axis=0)
+        if len(border_pixels) > 5:
+            return np.mean(border_pixels, axis=0)
         
-        # Fallback final: moyenne générale
+        # Fallback final: moyenne générale en évitant les extrêmes
+        flat_region = region.reshape(-1, 3)
+        # Éviter pixels trop blancs ou trop noirs
+        flat_hsv = color.rgb2hsv(flat_region.reshape(1, -1, 3))[0]
+        moderate_mask = (flat_hsv[:, 2] > 0.1) & (flat_hsv[:, 2] < 0.9)
+        
+        if np.any(moderate_mask):
+            return np.mean(flat_region[moderate_mask], axis=0)
+        else:
+            return np.mean(flat_region, axis=0)
+    
+    def _extract_dominant_color_v2(self, region):
+        """
+        Version améliorée d'extraction de couleur dominante - Focus sur la bordure épaisse
+        """
+        h, w = region.shape[:2]
+        center_y, center_x = h//2, w//2
+        radius = min(h, w) // 2
+        
+        # MÉTHODE SPÉCIFIQUE MÉTRO: Analyser la bordure épaisse
+        # Les signes métro ont une bordure colorée épaisse avec chiffre blanc au centre
+        
+        # 1. Extraire la bordure épaisse (zone colorée principale)
+        border_colors = []
+        
+        # Échantillonner plusieurs anneaux de la bordure
+        for ring_ratio in [0.7, 0.75, 0.8, 0.85]:
+            ring_radius = radius * ring_ratio
+            ring_pixels = self._sample_ring(region, center_x, center_y, 
+                                          ring_radius - 2, ring_radius + 2)
+            if ring_pixels:
+                border_colors.extend(ring_pixels)
+        
+        if len(border_colors) > 10:
+            border_colors = np.array(border_colors)
+            
+            # Filtrer les pixels trop clairs (blanc du chiffre) ou trop sombres
+            hsv_border = color.rgb2hsv(border_colors.reshape(1, -1, 3))[0]
+            
+            # Garder seulement les pixels avec bonne saturation et luminosité modérée
+            good_mask = (hsv_border[:, 1] > 0.25) & (hsv_border[:, 2] > 0.2) & (hsv_border[:, 2] < 0.8)
+            
+            if np.sum(good_mask) > 5:
+                good_border_colors = border_colors[good_mask]
+                
+                # Clustering pour trouver LA couleur dominante de la bordure
+                if len(good_border_colors) > 8:
+                    try:
+                        # Utiliser 2-3 clusters pour capturer la couleur principale
+                        n_clusters = min(3, len(good_border_colors)//8)
+                        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                        kmeans.fit(good_border_colors)
+                        
+                        # Prendre le cluster le plus saturé (= couleur du signe)
+                        cluster_colors = kmeans.cluster_centers_
+                        cluster_hsv = color.rgb2hsv(cluster_colors.reshape(1, -1, 3))[0]
+                        
+                        # Choisir le cluster avec la meilleure saturation
+                        best_cluster_idx = np.argmax(cluster_hsv[:, 1])
+                        return cluster_colors[best_cluster_idx]
+                    except:
+                        pass
+                
+                # Fallback: moyenne des bons pixels de bordure
+                return np.mean(good_border_colors, axis=0)
+        
+        # Méthode 2: Si pas assez de bordure détectée, méthode classique mais plus stricte
+        hsv_region = color.rgb2hsv(region)
+        saturation = hsv_region[:, :, 1]
+        value = hsv_region[:, :, 2]
+        
+        # Masque pour pixels colorés modérément (ni blanc ni noir)
+        colored_mask = (saturation > 0.3) & (value > 0.15) & (value < 0.85)
+        
+        if np.sum(colored_mask) > region.size * 0.15:  # Au moins 15% de pixels colorés
+            colored_pixels = region[colored_mask]
+            return np.mean(colored_pixels, axis=0)
+        
+        # Fallback final: moyenne des pixels non-blancs
+        non_white_mask = value < 0.9
+        if np.any(non_white_mask):
+            return np.mean(region[non_white_mask], axis=0)
+        
         return np.mean(region.reshape(-1, 3), axis=0)
     
     def _remove_duplicate_detections(self, detections):
