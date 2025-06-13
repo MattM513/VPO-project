@@ -65,7 +65,7 @@ def metro2025(type_,viewImages = 1):
         # Il sera porté en entrée de la fonction d'évaluation quantitative
         # Appel de votre fonction de reconnaissance
         from myMetroProcessing import processOneMetroImage
-        im_resized, bd = processOneMetroImage(nom, im, n_val, resize_factor)
+        im_resized, bd = processOneMetroImage(nom, im, n_val, resize_factor, save_images=False)
        
             
         if viewImages:    
@@ -93,6 +93,6 @@ if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:
         mode = sys.argv[1]
-        metro2025(mode, viewImages=0)
+        metro2025(mode, viewImages=1)
     else:
         print("Usage: python metro2025_ID.py [Learn|Test]")

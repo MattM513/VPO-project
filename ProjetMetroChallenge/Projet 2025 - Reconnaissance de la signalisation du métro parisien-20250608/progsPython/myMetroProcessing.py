@@ -14,41 +14,130 @@ from scipy import ndimage
 import cv2
 from sklearn.cluster import DBSCAN, KMeans
 
-
 class MetroLineDetector:
     """
     Système complet de détection et reconnaissance des lignes de métro
     """
     
     def __init__(self):
-        # Paramètres de détection - optimisés pour les signes de métro
-        self.min_area = 300
-        self.max_area = 8000
-        self.min_circularity = 0.3
-        self.color_tolerance = 0.2
+        self.min_area = 100           
+        self.max_area = 15000         
+        self.min_circularity = 0.2    
+        self.color_tolerance = 0.3    
         
         # Couleurs de référence des lignes (RGB normalisé, calibrées)
         self.ligne_colors = {
-            1: [0.9, 0.8, 0.1],     # Jaune
-            2: [0.1, 0.3, 0.8],     # Bleu
-            3: [0.4, 0.5, 0.2],     # Vert olive
-            4: [0.5, 0.1, 0.7],     # Violet
-            5: [0.9, 0.4, 0.1],     # Orange
-            6: [0.3, 0.7, 0.5],     # Vert clair
-            7: [0.9, 0.3, 0.5],     # Rose
-            8: [0.5, 0.7, 0.9],     # Bleu clair
-            9: [0.1, 0.4, 0.1],     # Vert foncé
-            10: [0.5, 0.3, 0.1],    # Marron
-            11: [0.6, 0.4, 0.2],    # Marron clair
-            12: [0.1, 0.6, 0.2],    # Vert
-            13: [0.3, 0.6, 0.8],    # Bleu clair
-            14: [0.4, 0.1, 0.6]     # Violet foncé
+            1: [1.0, 0.808, 0.0],       # #FFCE00 - Jaune
+            2: [0.0, 0.392, 0.690],     # #0064B0 - Bleu
+            3: [0.624, 0.596, 0.145],   # #9F9825 - Vert olive
+            4: [0.753, 0.255, 0.569],   # #C04191 - Rose/Magenta
+            5: [0.949, 0.557, 0.259],   # #F28E42 - Orange
+            6: [0.514, 0.769, 0.569],   # #83C491 - Vert clair
+            7: [0.953, 0.643, 0.729],   # #F3A4BA - Rose clair
+            8: [0.808, 0.678, 0.824],   # #CEADD2 - Mauve clair
+            9: [0.835, 0.788, 0.0],     # #D5C900 - Jaune-vert
+            10: [0.890, 0.702, 0.165],  # #E3B32A - Jaune orangé
+            11: [0.553, 0.369, 0.165],  # #8D5E2A - Marron
+            12: [0.0, 0.506, 0.310],    # #00814F - Vert
+            13: [0.596, 0.831, 0.886],  # #98D4E2 - Bleu clair
+            14: [0.400, 0.145, 0.514]   # #662483 - Violet
         }
         
-        # Paramètres de validation
+        # Paramètres de validation - MOINS RESTRICTIFS
         self.validation_enabled = True
-        self.min_distance_between_signs = 25
-        self.confidence_threshold = 0.7
+        self.min_distance_between_signs = 15 
+        self.confidence_threshold = 0.3   
+
+    def _detect_by_exact_colors(self, image):
+        """
+        Détection par couleurs EXACTES des lignes de métro - MÉTHODE PRINCIPALE
+        """
+        candidates = []
+        hsv = ski.color.rgb2hsv(image)
+        
+        # Pour chaque ligne, créer un masque couleur spécifique
+        for ligne, rgb_color in self.ligne_colors.items():
+            # Convertir RGB en HSV
+            hsv_color = ski.color.rgb2hsv(np.array([[rgb_color]]))[0, 0]
+            
+            # Tolérance adaptée selon la couleur
+            if ligne in [1, 9, 10]:  # Jaunes - plus de tolérance en H
+                h_tolerance = 0.03
+            elif ligne in [2, 13]:   # Bleus - tolérance moyenne
+                h_tolerance = 0.02  
+            else:                    # Autres couleurs
+                h_tolerance = 0.025
+            
+            # Créer le masque
+            h_diff = np.abs(hsv[:, :, 0] - hsv_color[0])
+            # Gérer la circularité de la teinte (0 et 1 sont proches)
+            h_diff = np.minimum(h_diff, 1.0 - h_diff)
+            
+            mask = (
+                (h_diff < h_tolerance) &
+                (hsv[:, :, 1] > 0.3) &  # Saturation minimale
+                (hsv[:, :, 2] > 0.3)    # Valeur minimale
+            )
+            
+            # Nettoyage morphologique
+            mask_cleaned = morphology.opening(mask, morphology.disk(2))
+            mask_cleaned = morphology.closing(mask_cleaned, morphology.disk(5))
+            
+            # Analyse des composantes connexes
+            labeled = measure.label(mask_cleaned)
+            
+            region_count = 0
+            for region in measure.regionprops(labeled):
+                if self._is_valid_sign_region_relaxed(region):
+                    minr, minc, maxr, maxc = region.bbox
+                    candidates.append({
+                        'bbox': (minc, maxc, minr, maxr),
+                        'area': region.area,
+                        'circularity': self._calculate_circularity(region),
+                        'centroid': region.centroid,
+                        'method': 'exact_color',
+                        'predicted_line': ligne,
+                        'confidence_bonus': 0.3  # Gros bonus pour couleur exacte
+                    })
+                    region_count += 1
+            
+            if region_count > 0:
+                print(f"Ligne {ligne}: {region_count} candidats trouvés")
+        
+        return candidates
+
+    def _is_valid_sign_region_relaxed(self, region):
+        """
+        Validation TRÈS permissive pour ne pas rater les signes
+        """
+        area = region.area
+        
+        # Taille très permissive
+        if area < 200 or area > 12000:
+            return False
+        
+        # Circularité très permissive
+        circularity = self._calculate_circularity(region)
+        if circularity < 0.2:  # Très permissif
+            return False
+        
+        # Aspect ratio très permissif
+        minr, minc, maxr, maxc = region.bbox
+        width = maxc - minc
+        height = maxr - minr
+        
+        if width == 0 or height == 0:
+            return False
+        
+        aspect_ratio = min(width/height, height/width)
+        if aspect_ratio < 0.4:  # Très permissif
+            return False
+        
+        # Taille absolue très permissive
+        if width < 12 or height < 12:
+            return False
+        
+        return True
         
     def preprocess_image(self, image):
         """
@@ -71,62 +160,120 @@ class MetroLineDetector:
     
     def detect_circular_regions_simplified(self, image):
         """
-        Détection simplifiée et plus précise des signes de métro
-        Focus sur les vraies caractéristiques des panneaux
+        Détection avec méthodes multiples - COULEURS EXACTES EN PRIORITÉ
         """
         candidates = []
         
-        # Conversion en niveaux de gris
+        # MÉTHODE 1: Détection par couleurs EXACTES (PRIORITAIRE)
+        exact_candidates = self._detect_by_exact_colors(image)
+        candidates.extend(exact_candidates)
+        print(f"Couleurs exactes: {len(exact_candidates)} candidats")
+        
+        # MÉTHODE 2: Hough Circles (backup)
+        hough_candidates = self._detect_hough_simple(image)
+        candidates.extend(hough_candidates)
+        print(f"Hough circles: {len(hough_candidates)} candidats")
+        
+        # MÉTHODE 3: Seuillage simple (backup)
+        threshold_candidates = self._detect_by_simple_threshold(image)
+        candidates.extend(threshold_candidates)
+        print(f"Seuillage simple: {len(threshold_candidates)} candidats")
+        
+        # MÉTHODE 4: Couleurs spécifiques (backup)
+        color_candidates = self._detect_by_specific_colors(image)
+        candidates.extend(color_candidates)
+        print(f"Couleurs spécifiques: {len(color_candidates)} candidats")
+        
+        print(f"Total candidats trouvés: {len(candidates)}")
+        return candidates
+    
+    def _detect_hough_simple(self, image):
+        """
+        Version simplifiée de Hough avec paramètres moins restrictifs
+        """
+        candidates = []
         gray = ski.color.rgb2gray(image)
         
-        # Détection de cercles avec Hough Transform - plus fiable pour les formes circulaires
         try:
-            # Conversion pour OpenCV
             gray_uint8 = (gray * 255).astype(np.uint8)
             
-            # Détection de cercles avec paramètres ajustés pour les signes de métro
+            # Paramètres MOINS restrictifs pour Hough
             circles = cv2.HoughCircles(
                 gray_uint8,
                 cv2.HOUGH_GRADIENT,
-                dp=1,                    # Résolution
-                minDist=30,              # Distance minimale entre cercles
-                param1=50,               # Seuil Canny élevé
-                param2=30,               # Seuil d'accumulation
-                minRadius=15,            # Rayon minimum
-                maxRadius=60             # Rayon maximum
+                dp=1,
+                minDist=20,      # Était 30 - moins restrictif
+                param1=30,       # Était 50 - moins restrictif  
+                param2=20,       # Était 30 - moins restrictif
+                minRadius=10,    # Était 15 - plus petit
+                maxRadius=80     # Était 60 - plus grand
             )
             
             if circles is not None:
                 circles = np.round(circles[0, :]).astype("int")
+                print(f"Hough a trouvé {len(circles)} cercles")
                 
                 for (x, y, r) in circles:
-                    # Vérifier les limites
                     x1 = max(0, x - r - 5)
                     x2 = min(image.shape[1], x + r + 5)
                     y1 = max(0, y - r - 5)
                     y2 = min(image.shape[0], y + r + 5)
                     
-                    # Vérifier que c'est une région valide
                     if x2 > x1 and y2 > y1:
-                        # Extraire la région pour analyse couleur
-                        region = image[y1:y2, x1:x2]
-                        
-                        # Vérifier si la région contient des couleurs typiques des lignes
-                        if self._has_metro_line_colors(region):
-                            candidates.append({
-                                'bbox': (x1, x2, y1, y2),
-                                'area': np.pi * r * r,
-                                'circularity': 1.0,
-                                'centroid': (y, x),
-                                'method': 'hough_targeted'
-                            })
+                        candidates.append({
+                            'bbox': (x1, x2, y1, y2),
+                            'area': np.pi * r * r,
+                            'circularity': 1.0,
+                            'centroid': (y, x),
+                            'method': 'hough_simple'
+                        })
         
         except Exception as e:
             print(f"Erreur Hough circles: {e}")
         
-        # Méthode de backup : détection par couleur ciblée
-        candidates.extend(self._detect_by_specific_colors(image))
+        return candidates
+
+    def _detect_by_simple_threshold(self, image):
+        """
+        NOUVELLE MÉTHODE: Détection simple par seuillage couleur
+        """
+        candidates = []
         
+        # Convertir en HSV
+        hsv = ski.color.rgb2hsv(image)
+        
+        # Seuillages très larges pour capturer toutes les couleurs vives
+        # Saturation élevée (couleurs vives)
+        mask_saturation = hsv[:, :, 1] > 0.3
+        
+        # Valeur élevée (couleurs claires)
+        mask_value = hsv[:, :, 2] > 0.3
+        
+        # Combiner les masques
+        mask_combined = mask_saturation & mask_value
+        
+        # Nettoyage morphologique
+        mask_cleaned = morphology.opening(mask_combined, morphology.disk(2))
+        mask_cleaned = morphology.closing(mask_cleaned, morphology.disk(6))
+        
+        # Analyse des composantes connexes
+        labeled = measure.label(mask_cleaned)
+        
+        for region in measure.regionprops(labeled):
+            # Critères TRÈS PERMISSIFS
+            if (region.area > 150 and region.area < 10000 and
+                region.extent > 0.3):  # Très permissif
+                
+                minr, minc, maxr, maxc = region.bbox
+                candidates.append({
+                    'bbox': (minc, maxc, minr, maxr),
+                    'area': region.area,
+                    'circularity': self._calculate_circularity(region),
+                    'centroid': region.centroid,
+                    'method': 'simple_threshold'
+                })
+        
+        print(f"Seuillage simple a trouvé {len(candidates)} candidats")
         return candidates
 
     def _has_metro_line_colors(self, region):
@@ -200,20 +347,20 @@ class MetroLineDetector:
 
     def _is_strict_metro_sign(self, region):
         """
-        Validation très stricte pour les signes de métro
+        Validation MOINS stricte pour les signes de métro
         """
         area = region.area
         
-        # Taille très spécifique aux signes de métro
-        if area < 1000 or area > 5000:
+        # Taille MOINS restrictive
+        if area < 200 or area > 8000:  # Était 1000-5000 - trop strict
             return False
         
-        # Circularité très stricte
+        # Circularité MOINS restrictive
         circularity = self._calculate_circularity(region)
-        if circularity < 0.7:  # Très rond obligatoire
+        if circularity < 0.3:  # Était 0.7 - beaucoup trop strict
             return False
         
-        # Aspect ratio très strict
+        # Aspect ratio MOINS strict
         minr, minc, maxr, maxc = region.bbox
         width = maxc - minc
         height = maxr - minr
@@ -222,15 +369,15 @@ class MetroLineDetector:
             return False
         
         aspect_ratio = min(width/height, height/width)
-        if aspect_ratio < 0.85:  # Quasi carré obligatoire
+        if aspect_ratio < 0.6:  # Était 0.85 - trop strict
             return False
         
-        # Taille absolue minimale
-        if width < 30 or height < 30:
+        # Taille absolue MOINS restrictive
+        if width < 15 or height < 15:  # Était 30x30 - trop strict
             return False
         
-        # Taille absolue maximale
-        if width > 80 or height > 80:
+        # Taille absolue maximale MOINS restrictive
+        if width > 120 or height > 120:  # Était 80x80 - trop strict
             return False
         
         return True
@@ -375,18 +522,21 @@ class MetroLineDetector:
         return candidates
     
     def _is_valid_sign_region(self, region):
+        """
+        Validation MOINS stricte pour les régions
+        """
         area = region.area
         
-        # Filtrage par taille (plus restrictif)
-        if area < 800 or area > 4000:  # Plus strict
+        # Filtrage par taille MOINS restrictif
+        if area < 400 or area > 6000:  # Était 800-4000
             return False
         
-        # Filtrage par circularité (plus strict)
+        # Filtrage par circularité MOINS restrictif
         circularity = self._calculate_circularity(region)
-        if circularity < 0.6:  # Plus strict (était 0.3)
+        if circularity < 0.4:  # Était 0.6
             return False
         
-        # Filtrage par rapport largeur/hauteur (plus strict)
+        # Filtrage par rapport largeur/hauteur MOINS restrictif
         minr, minc, maxr, maxc = region.bbox
         width = maxc - minc
         height = maxr - minr
@@ -395,11 +545,11 @@ class MetroLineDetector:
             return False
         
         aspect_ratio = min(width/height, height/width)
-        if aspect_ratio < 0.8:  # Plus strict (était 0.6)
+        if aspect_ratio < 0.6:  # Était 0.8
             return False
         
-        # Nouveau filtre : taille minimale absolue
-        if width < 25 or height < 25:
+        # Taille minimale absolue MOINS restrictive
+        if width < 20 or height < 20:  # Était 25x25
             return False
             
         return True
@@ -583,7 +733,7 @@ class MetroLineDetector:
     
     def estimate_detection_confidence(self, image, candidate):
         """
-        Estime la confiance d'une détection
+        Estimation de confiance avec bonus pour couleurs exactes
         """
         bbox = candidate['bbox']
         x1, x2, y1, y2 = bbox
@@ -595,43 +745,49 @@ class MetroLineDetector:
         
         scores = []
         
-        # Score de circularité
+        # Score de circularité (moins strict)
         circularity = candidate.get('circularity', 0.5)
-        circularity_score = min(circularity / 0.8, 1.0)
+        circularity_score = min(circularity / 0.6, 1.0)  # Moins strict
         scores.append(circularity_score)
         
-        # Score de taille
+        # Score de taille (plus tolérant)
         area = candidate.get('area', 0)
-        optimal_area = 2000  # Taille optimale approximative
-        size_score = 1.0 - abs(area - optimal_area) / optimal_area
+        optimal_area = 2000
+        size_score = 1.0 - abs(area - optimal_area) / (optimal_area * 2)  # Plus tolérant
         size_score = max(0.0, min(1.0, size_score))
         scores.append(size_score)
         
-        # Score de contraste
+        # Score de contraste (moins strict)
         if len(region.shape) == 3:
             gray = np.mean(region, axis=2)
         else:
             gray = region
         
         contrast = np.std(gray)
-        contrast_score = min(contrast / 0.25, 1.0)
+        contrast_score = min(contrast / 0.2, 1.0)  # Moins strict
         scores.append(contrast_score)
         
-        # Bonus pour certaines méthodes de détection
+        # GROS bonus pour détection couleur exacte
         method_bonus = {
-            'contours': 0.0,
-            'color': 0.1,
-            'hough': 0.05
+            'exact_color': 0.4,         # GROS BONUS !
+            'hough_simple': 0.1,
+            'simple_threshold': 0.05,
+            'color_targeted': 0.1,
+            'contours': 0.0
         }
         
-        method = candidate.get('method', 'contours')
+        method = candidate.get('method', 'simple_threshold')
         bonus = method_bonus.get(method, 0.0)
+        
+        # Bonus supplémentaire si ligne prédite
+        if 'confidence_bonus' in candidate:
+            bonus += candidate['confidence_bonus']
         
         confidence = np.mean(scores) + bonus
         return min(1.0, confidence)
 
 
-def processOneMetroImage(nom, im, n, resizeFactor):
+def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     """
     Fonction principale de traitement - Version finale optimisée
     """
@@ -656,8 +812,12 @@ def processOneMetroImage(nom, im, n, resizeFactor):
     # Détection multi-méthodes
     candidates = detector.detect_circular_regions_simplified(image_processed)
     
+    # DEBUG: Afficher le nombre de candidats trouvés
+    print(f"Image {nom}: {len(candidates)} candidats trouvés")
+    
     # Suppression des chevauchements
     candidates = detector.remove_overlapping_detections(candidates)
+    print(f"Après suppression chevauchements: {len(candidates)} candidats")
     
     # Filtrage par confiance
     confident_candidates = []
@@ -665,6 +825,8 @@ def processOneMetroImage(nom, im, n, resizeFactor):
         confidence = detector.estimate_detection_confidence(image_processed, candidate)
         if confidence >= detector.confidence_threshold:
             confident_candidates.append(candidate)
+    
+    print(f"Candidats avec confiance >= {detector.confidence_threshold}: {len(confident_candidates)}")
     
     # Limitation du nombre de détections
     if len(confident_candidates) > 8:
@@ -694,29 +856,7 @@ def processOneMetroImage(nom, im, n, resizeFactor):
     else:
         bd = np.empty((0, 6))
     
-    # Affichage des résultats
-    # plt.figure(figsize=(12, 8))
-    # plt.imshow(im_resized)
-    
-    # if bd.size > 0:
-    #     for k in range(bd.shape[0]):
-    #         draw_rectangle(bd[k,3], bd[k,4], bd[k,1], bd[k,2], 'g')
-    #         # Afficher le numéro de ligne détecté
-    #         center_x = (bd[k,1] + bd[k,2]) / 2
-    #         center_y = (bd[k,3] + bd[k,4]) / 2
-    #         plt.text(center_x, center_y, str(int(bd[k,5])), 
-    #                 color='red', fontsize=12, fontweight='bold',
-    #                 ha='center', va='center')
-        
-    #     lignes_detectees = bd[:,5].astype(int)
-    #     plt.title(f'{nom} - Lignes détectées: {lignes_detectees} ({len(lignes_detectees)} signes)')
-    # else:
-    #     plt.title(f'{nom} - Aucune ligne détectée')
-    
-    # plt.axis('off')
-    # plt.tight_layout()
-    # plt.show()
-
+    # AFFICHAGE AMÉLIORÉ (ne ferme plus automatiquement)
     plt.figure(figsize=(10, 6))
     plt.imshow(im_resized)
 
@@ -736,16 +876,21 @@ def processOneMetroImage(nom, im, n, resizeFactor):
 
     plt.axis('off')
     plt.tight_layout()
-
+    
+    # MODIFICATION IMPORTANTE: Ne plus fermer automatiquement
+    plt.show()
+    
+    # Attendre input pour voir l'image
+    # input("Appuyez sur Entrée pour continuer...")
+    
     # Sauvegarde automatique
-    import os
-    output_dir = 'results_images'
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f'{nom}_detected.png')
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close()  # Important : ferme automatiquement
-
-    print(f"Image sauvegardée : {output_path}")
+    if save_images:
+        import os
+        output_dir = 'results_images'
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f'{nom}_detected.png')
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        print(f"Image sauvegardée : {output_path}")
     
     return im_resized, bd
 
@@ -758,3 +903,21 @@ def draw_rectangle(x1, x2, y1, y2, color):
                     linewidth=2, edgecolor=color, facecolor='none')
     ax = plt.gca()
     ax.add_patch(rect)
+
+def test_detection_simple():
+    """Test rapide pour voir si la détection fonctionne"""
+    # Créer une image test avec un cercle coloré
+    test_image = np.zeros((200, 200, 3))
+    # Cercle jaune au centre
+    rr, cc = ski.draw.disk((100, 100), 30)
+    test_image[rr, cc] = [0.9, 0.8, 0.1]  # Jaune ligne 1
+    
+    detector = MetroLineDetector()
+    candidates = detector.detect_circular_regions_simplified(test_image)
+    
+    print(f"Test simple: {len(candidates)} candidats trouvés")
+    return len(candidates) > 0
+
+# Appelez ceci au début de processOneMetroImage
+if test_detection_simple():
+    print("Détection fonctionne sur image test")
