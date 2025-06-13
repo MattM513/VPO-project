@@ -42,7 +42,7 @@ def metro2025(type_,viewImages = 1):
         im = np.array(Image.open(im_path).convert('RGB')) / 255.0
 
         if viewImages:
-            fig = plt.figure(figsize=(45,15))
+            fig = plt.figure(figsize=(15,8))
             plt.subplot(1,2,1)
             plt.imshow(im)
     

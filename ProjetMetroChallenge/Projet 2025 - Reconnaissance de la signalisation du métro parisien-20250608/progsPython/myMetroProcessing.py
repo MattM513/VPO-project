@@ -785,11 +785,345 @@ class MetroLineDetector:
         
         confidence = np.mean(scores) + bonus
         return min(1.0, confidence)
+    
+class HybridMetroLineDetector:
+    """
+    Détecteur hybride utilisant couleurs théoriques ET réelles optimisées
+    """
+    
+    def __init__(self):
+        # Paramètres optimisés basés sur votre analyse
+        self.min_area = 816          # De votre analyse
+        self.max_area = 15693        # De votre analyse  
+        self.min_width = 47          # De votre analyse
+        self.max_width = 126         # De votre analyse
+        self.min_height = 48         # De votre analyse
+        self.max_height = 126        # De votre analyse
+        self.min_aspect_ratio = 0.75 # Légèrement ajusté
+        self.optimal_area = 8255     # De votre analyse
+        
+        # Couleurs THÉORIQUES exactes (couleurs officielles)
+        self.couleurs_theoriques = {
+            1: [1.0, 0.808, 0.0],       # #FFCE00 - Jaune
+            2: [0.0, 0.392, 0.690],     # #0064B0 - Bleu
+            3: [0.624, 0.596, 0.145],   # #9F9825 - Vert olive
+            4: [0.753, 0.255, 0.569],   # #C04191 - Rose/Magenta
+            5: [0.949, 0.557, 0.259],   # #F28E42 - Orange
+            6: [0.514, 0.769, 0.569],   # #83C491 - Vert clair
+            7: [0.953, 0.643, 0.729],   # #F3A4BA - Rose clair
+            8: [0.808, 0.678, 0.824],   # #CEADD2 - Mauve clair
+            9: [0.835, 0.788, 0.0],     # #D5C900 - Jaune-vert
+            10: [0.890, 0.702, 0.165],  # #E3B32A - Jaune orangé
+            11: [0.553, 0.369, 0.165],  # #8D5E2A - Marron
+            12: [0.0, 0.506, 0.310],    # #00814F - Vert
+            13: [0.596, 0.831, 0.886],  # #98D4E2 - Bleu clair
+            14: [0.400, 0.145, 0.514]   # #662483 - Violet
+        }
+        
+        # Couleurs RÉELLES optimisées (de votre analyse)
+        self.couleurs_reelles = {
+            1: [0.522, 0.438, 0.295],   # #856f4b
+            2: [0.277, 0.371, 0.565],   # #465e90
+            3: [0.624, 0.690, 0.773],   # #9fb0c5
+            4: [0.382, 0.218, 0.061],   # #61370f
+            6: [0.386, 0.476, 0.355],   # #62795a
+            7: [0.409, 0.420, 0.485],   # #686b7b
+            8: [0.392, 0.349, 0.477],   # #645979
+            9: [0.465, 0.410, 0.051],   # #76680d
+            10: [0.316, 0.255, 0.078],  # #504114
+            12: [0.414, 0.409, 0.319],  # #696851
+            13: [0.379, 0.335, 0.263],  # #605543
+            14: [0.049, 0.178, 0.769]   # #0c2dc3
+        }
+        
+        # Paramètres de validation
+        self.confidence_threshold = 0.4  # Ajusté
+        
+    def detect_by_hybrid_colors(self, image):
+        """
+        Détection utilisant les DEUX sets de couleurs
+        """
+        candidates = []
+        hsv = ski.color.rgb2hsv(image)
+        
+        # ÉTAPE 1: Détection avec couleurs théoriques (plus stricte)
+        theoretical_candidates = self._detect_with_color_set(
+            image, hsv, self.couleurs_theoriques, 
+            tolerance=0.02, method='theoretical'
+        )
+        candidates.extend(theoretical_candidates)
+        
+        # ÉTAPE 2: Détection avec couleurs réelles (plus permissive)
+        real_candidates = self._detect_with_color_set(
+            image, hsv, self.couleurs_reelles, 
+            tolerance=0.04, method='real'
+        )
+        candidates.extend(real_candidates)
+        
+        print(f"Couleurs théoriques: {len(theoretical_candidates)} candidats")
+        print(f"Couleurs réelles: {len(real_candidates)} candidats")
+        
+        return candidates
+    
+    def _detect_with_color_set(self, image, hsv, color_dict, tolerance, method):
+        """
+        Détection avec un set de couleurs donné
+        """
+        candidates = []
+        
+        for ligne, rgb_color in color_dict.items():
+            # Convertir RGB en HSV
+            hsv_color = ski.color.rgb2hsv(np.array([[rgb_color]]))[0, 0]
+            
+            # Créer le masque couleur
+            h_diff = np.abs(hsv[:, :, 0] - hsv_color[0])
+            h_diff = np.minimum(h_diff, 1.0 - h_diff)  # Circularité teinte
+            
+            # Saturation minimale selon le type
+            s_min = 0.4 if method == 'theoretical' else 0.15
+            v_min = 0.4 if method == 'theoretical' else 0.2
+            
+            mask = (
+                (h_diff < tolerance) &
+                (hsv[:, :, 1] > s_min) &
+                (hsv[:, :, 2] > v_min)
+            )
+            
+            # Nettoyage morphologique
+            mask_cleaned = morphology.opening(mask, morphology.disk(2))
+            mask_cleaned = morphology.closing(mask_cleaned, morphology.disk(4))
+            
+            # Analyse des composantes connexes
+            labeled = measure.label(mask_cleaned)
+            
+            for region in measure.regionprops(labeled):
+                if self._is_valid_metro_sign(region):
+                    minr, minc, maxr, maxc = region.bbox
+                    
+                    # Bonus de confiance selon la méthode
+                    confidence_bonus = 0.3 if method == 'theoretical' else 0.2
+                    
+                    candidates.append({
+                        'bbox': (minc, maxc, minr, maxr),
+                        'area': region.area,
+                        'circularity': self._calculate_circularity(region),
+                        'centroid': region.centroid,
+                        'method': f'hybrid_{method}',
+                        'predicted_line': ligne,
+                        'confidence_bonus': confidence_bonus
+                    })
+        
+        return candidates
+    
+    def _is_valid_metro_sign(self, region):
+        """
+        Validation basée sur vos statistiques réelles
+        """
+        area = region.area
+        
+        # Utiliser vos paramètres optimisés
+        if area < self.min_area or area > self.max_area:
+            return False
+        
+        # Circularité
+        circularity = self._calculate_circularity(region)
+        if circularity < 0.4:  # Permissif
+            return False
+        
+        # Dimensions
+        minr, minc, maxr, maxc = region.bbox
+        width = maxc - minc
+        height = maxr - minr
+        
+        if (width < self.min_width or width > self.max_width or
+            height < self.min_height or height > self.max_height):
+            return False
+        
+        # Aspect ratio
+        if width > 0 and height > 0:
+            aspect_ratio = min(width/height, height/width)
+            if aspect_ratio < self.min_aspect_ratio:
+                return False
+        
+        return True
+    
+    def _calculate_circularity(self, region):
+        """Calcule la circularité"""
+        area = region.area
+        perimeter = region.perimeter
+        
+        if perimeter == 0:
+            return 0
+        
+        circularity = 4 * np.pi * area / (perimeter ** 2)
+        return circularity
+    
+    def classify_line_hybrid(self, image, bbox, candidate_info=None):
+        """
+        Classification hybride utilisant les deux sets de couleurs
+        """
+        x1, x2, y1, y2 = bbox
+        region = image[y1:y2, x1:x2]
+        
+        if region.size == 0:
+            return 1
+        
+        # Couleur moyenne de la région
+        mean_color = np.mean(region.reshape(-1, 3), axis=0)
+        
+        # Si déjà une prédiction (de la détection couleur)
+        if candidate_info and 'predicted_line' in candidate_info:
+            predicted_line = candidate_info['predicted_line']
+            
+            # Vérifier cohérence avec couleur théorique
+            theoretical_color = np.array(self.couleurs_theoriques.get(predicted_line, [0.5, 0.5, 0.5]))
+            theoretical_distance = np.linalg.norm(mean_color - theoretical_color)
+            
+            # Vérifier cohérence avec couleur réelle si disponible
+            real_distance = float('inf')
+            if predicted_line in self.couleurs_reelles:
+                real_color = np.array(self.couleurs_reelles[predicted_line])
+                real_distance = np.linalg.norm(mean_color - real_color)
+            
+            # Si une des distances est acceptable, garder la prédiction
+            if theoretical_distance < 0.4 or real_distance < 0.3:
+                return predicted_line
+        
+        # Sinon, classification par distance minimale (théorique + réelle)
+        best_match = 1
+        min_distance = float('inf')
+        
+        for ligne in range(1, 15):
+            # Distance avec couleur théorique
+            theoretical_color = np.array(self.couleurs_theoriques.get(ligne, [0.5, 0.5, 0.5]))
+            theoretical_distance = np.linalg.norm(mean_color - theoretical_color)
+            
+            # Distance avec couleur réelle si disponible
+            real_distance = float('inf')
+            if ligne in self.couleurs_reelles:
+                real_color = np.array(self.couleurs_reelles[ligne])
+                real_distance = np.linalg.norm(mean_color - real_color)
+            
+            # Prendre la distance minimale
+            combined_distance = min(theoretical_distance, real_distance)
+            
+            if combined_distance < min_distance:
+                min_distance = combined_distance
+                best_match = ligne
+        
+        return best_match
+    
+    def estimate_detection_confidence(self, image, candidate):
+        """
+        Estimation de confiance avec bonus pour méthode hybride
+        """
+        bbox = candidate['bbox']
+        x1, x2, y1, y2 = bbox
+        region = image[y1:y2, x1:x2]
+        
+        if region.size == 0:
+            return 0.0
+        
+        scores = []
+        
+        # Score de circularité
+        circularity = candidate.get('circularity', 0.5)
+        circularity_score = min(circularity / 0.6, 1.0)
+        scores.append(circularity_score)
+        
+        # Score de taille (basé sur vos statistiques)
+        area = candidate.get('area', 0)
+        size_score = 1.0 - abs(area - self.optimal_area) / self.optimal_area
+        size_score = max(0.0, min(1.0, size_score))
+        scores.append(size_score)
+        
+        # Score de contraste
+        gray = np.mean(region, axis=2) if len(region.shape) == 3 else region
+        contrast = np.std(gray)
+        contrast_score = min(contrast / 0.2, 1.0)
+        scores.append(contrast_score)
+        
+        # Bonus selon la méthode
+        method_bonus = {
+            'hybrid_theoretical': 0.4,  # Bonus élevé pour couleurs théoriques
+            'hybrid_real': 0.3,         # Bonus moyen pour couleurs réelles
+        }
+        
+        method = candidate.get('method', 'hybrid_real')
+        bonus = method_bonus.get(method, 0.0)
+        
+        # Bonus supplémentaire
+        if 'confidence_bonus' in candidate:
+            bonus += candidate['confidence_bonus']
+        
+        confidence = np.mean(scores) + bonus
+        return min(1.0, confidence)
+    
+    def remove_overlapping_detections(self, candidates):
+        """
+        Supprime les détections qui se chevauchent - POUR LE DÉTECTEUR HYBRIDE
+        """
+        if len(candidates) <= 1:
+            return candidates
+        
+        # Calcul des IoU (Intersection over Union)
+        filtered_candidates = []
+        
+        # Trier par confiance/aire (plus grandes d'abord)
+        candidates_sorted = sorted(candidates, 
+                                key=lambda x: x.get('area', 0), reverse=True)
+        
+        for i, candidate in enumerate(candidates_sorted):
+            bbox1 = candidate['bbox']
+            
+            # Vérifier le chevauchement avec les candidats déjà acceptés
+            overlaps = False
+            
+            for accepted in filtered_candidates:
+                bbox2 = accepted['bbox']
+                iou = self._calculate_iou(bbox1, bbox2)
+                
+                if iou > 0.3:  # Seuil de chevauchement
+                    overlaps = True
+                    break
+            
+            if not overlaps:
+                filtered_candidates.append(candidate)
+        
+        return filtered_candidates
+
+    def _calculate_iou(self, bbox1, bbox2):
+        """
+        Calcule l'Intersection over Union entre deux boîtes - POUR LE DÉTECTEUR HYBRIDE
+        """
+        x1_1, x2_1, y1_1, y2_1 = bbox1
+        x1_2, x2_2, y1_2, y2_2 = bbox2
+        
+        # Intersection
+        x1_inter = max(x1_1, x1_2)
+        x2_inter = min(x2_1, x2_2)
+        y1_inter = max(y1_1, y1_2)
+        y2_inter = min(y2_1, y2_2)
+        
+        if x2_inter <= x1_inter or y2_inter <= y1_inter:
+            return 0.0
+        
+        area_inter = (x2_inter - x1_inter) * (y2_inter - y1_inter)
+        
+        # Union
+        area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+        area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+        area_union = area1 + area2 - area_inter
+        
+        if area_union == 0:
+            return 0.0
+        
+        return area_inter / area_union
 
 
 def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     """
-    Fonction principale de traitement - Version finale optimisée
+    Fonction principale avec détecteur HYBRIDE optimisé
     """
     
     # Redimensionnement
@@ -803,17 +1137,16 @@ def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     else:
         im_resized = im
     
-    # Initialisation du détecteur
-    detector = MetroLineDetector()
+    # Utiliser le détecteur HYBRIDE optimisé
+    detector = HybridMetroLineDetector()
     
     # Prétraitement
-    image_processed, hsv = detector.preprocess_image(im_resized)
+    image_enhanced = ski.exposure.equalize_adapthist(im_resized, clip_limit=0.02)
+    image_processed = ski.filters.gaussian(image_enhanced, sigma=0.8)
     
-    # Détection multi-méthodes
-    candidates = detector.detect_circular_regions_simplified(image_processed)
-    
-    # DEBUG: Afficher le nombre de candidats trouvés
-    print(f"Image {nom}: {len(candidates)} candidats trouvés")
+    # Détection hybride (couleurs théoriques + réelles)
+    candidates = detector.detect_by_hybrid_colors(image_processed)
+    print(f"Image {nom}: {len(candidates)} candidats hybrides trouvés")
     
     # Suppression des chevauchements
     candidates = detector.remove_overlapping_detections(candidates)
@@ -828,15 +1161,14 @@ def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     
     print(f"Candidats avec confiance >= {detector.confidence_threshold}: {len(confident_candidates)}")
     
-    # Limitation du nombre de détections
-    if len(confident_candidates) > 8:
-        # Trier par confiance et garder les 8 meilleures
+    # Limitation du nombre de détections (max 6 pour éviter sur-détection)
+    if len(confident_candidates) > 6:
         candidates_with_conf = [
             (candidate, detector.estimate_detection_confidence(image_processed, candidate))
             for candidate in confident_candidates
         ]
         candidates_with_conf.sort(key=lambda x: x[1], reverse=True)
-        confident_candidates = [c[0] for c in candidates_with_conf[:8]]
+        confident_candidates = [c[0] for c in candidates_with_conf[:6]]
     
     # Construction du résultat final
     bd = []
@@ -844,8 +1176,8 @@ def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     for candidate in confident_candidates:
         x1, x2, y1, y2 = candidate['bbox']
         
-        # Classification du numéro de ligne
-        ligne = detector.classify_line_advanced(im_resized, (x1, x2, y1, y2), candidate)
+        # Classification hybride
+        ligne = detector.classify_line_hybrid(im_resized, (x1, x2, y1, y2), candidate)
         
         # Ajout au résultat
         bd.append([n, x1, x2, y1, y2, ligne])
@@ -856,8 +1188,8 @@ def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     else:
         bd = np.empty((0, 6))
     
-    # AFFICHAGE AMÉLIORÉ (ne ferme plus automatiquement)
-    plt.figure(figsize=(10, 6))
+    # Affichage des résultats
+    plt.figure(figsize=(12, 8))  # Taille normale
     plt.imshow(im_resized)
 
     if bd.size > 0:
@@ -866,24 +1198,21 @@ def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
             center_x = (bd[k,1] + bd[k,2]) / 2
             center_y = (bd[k,3] + bd[k,4]) / 2
             plt.text(center_x, center_y, str(int(bd[k,5])), 
-                    color='red', fontsize=12, fontweight='bold',
-                    ha='center', va='center')
+                    color='red', fontsize=14, fontweight='bold',
+                    ha='center', va='center',
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
         
         lignes_detectees = bd[:,5].astype(int)
-        plt.title(f'{nom} - Lignes détectées: {lignes_detectees} ({len(lignes_detectees)} signes)')
+        plt.title(f'{nom} - Lignes détectées: {lignes_detectees} ({len(lignes_detectees)} signes)', 
+                 fontsize=16, fontweight='bold')
     else:
-        plt.title(f'{nom} - Aucune ligne détectée')
+        plt.title(f'{nom} - Aucune ligne détectée', fontsize=16, fontweight='bold')
 
     plt.axis('off')
     plt.tight_layout()
-    
-    # MODIFICATION IMPORTANTE: Ne plus fermer automatiquement
     plt.show()
     
-    # Attendre input pour voir l'image
-    # input("Appuyez sur Entrée pour continuer...")
-    
-    # Sauvegarde automatique
+    # Sauvegarde conditionnelle
     if save_images:
         import os
         output_dir = 'results_images'
