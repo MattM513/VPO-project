@@ -1123,7 +1123,7 @@ class HybridMetroLineDetector:
 
 def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     """
-    Fonction principale avec détecteur HYBRIDE optimisé
+    Fonction principale CORRIGÉE - ordre des paramètres et détection
     """
     
     # Redimensionnement
@@ -1137,8 +1137,13 @@ def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     else:
         im_resized = im
     
-    # Utiliser le détecteur HYBRIDE optimisé
+    print(f"\n🖼️ Traitement image {nom} (taille: {im_resized.shape})")
+    
+    # Utiliser le détecteur HYBRIDE optimisé avec PARAMÈTRES PLUS STRICTS
     detector = HybridMetroLineDetector()
+    
+    # CORRECTION: Paramètres plus stricts pour éviter les fausses détections
+    detector.confidence_threshold = 0.6  # Plus strict
     
     # Prétraitement
     image_enhanced = ski.exposure.equalize_adapthist(im_resized, clip_limit=0.02)
@@ -1148,36 +1153,91 @@ def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     candidates = detector.detect_by_hybrid_colors(image_processed)
     print(f"Image {nom}: {len(candidates)} candidats hybrides trouvés")
     
+    # DEBUG: Afficher détails des candidats
+    for i, candidate in enumerate(candidates):
+        bbox = candidate['bbox']
+        method = candidate.get('method', 'unknown')
+        predicted = candidate.get('predicted_line', 'none')
+        print(f"  Candidat {i+1}: {method}, ligne prédite: {predicted}, bbox: {bbox}")
+        
+        # NOUVEAU: Vérifier si la détection est dans la zone centrale
+        x1, x2, y1, y2 = bbox
+        width = x2 - x1
+        height = y2 - y1
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
+        img_center_x = im_resized.shape[1] / 2
+        img_center_y = im_resized.shape[0] / 2
+        
+        # Distance du centre de l'image
+        dist_from_center = np.sqrt((center_x - img_center_x)**2 + (center_y - img_center_y)**2)
+        max_dist = min(im_resized.shape[0], im_resized.shape[1]) / 2
+        
+        print(f"    Taille: {width}x{height}, Centre: ({center_x:.0f},{center_y:.0f})")
+        print(f"    Distance du centre image: {dist_from_center:.0f}/{max_dist:.0f}")
+        
+        # Marquer comme suspect si trop excentré
+        if dist_from_center > max_dist * 0.8:
+            print(f"    ⚠️ SUSPECT: Détection trop excentrée!")
+    
     # Suppression des chevauchements
     candidates = detector.remove_overlapping_detections(candidates)
     print(f"Après suppression chevauchements: {len(candidates)} candidats")
     
+    # NOUVEAU: Filtrage géographique - éliminer les détections trop excentrées
+    centered_candidates = []
+    for candidate in candidates:
+        bbox = candidate['bbox']
+        x1, x2, y1, y2 = bbox
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
+        img_center_x = im_resized.shape[1] / 2
+        img_center_y = im_resized.shape[0] / 2
+        
+        # Distance du centre (normalisée)
+        dist_from_center = np.sqrt((center_x - img_center_x)**2 + (center_y - img_center_y)**2)
+        max_dist = min(im_resized.shape[0], im_resized.shape[1]) / 2
+        
+        # Garder seulement les détections pas trop excentrées
+        if dist_from_center < max_dist * 0.75:  # Dans les 75% centraux
+            centered_candidates.append(candidate)
+        else:
+            print(f"❌ Éliminé candidat trop excentré à ({center_x:.0f},{center_y:.0f})")
+    
+    print(f"Après filtrage géographique: {len(centered_candidates)} candidats")
+    
     # Filtrage par confiance
     confident_candidates = []
-    for candidate in candidates:
+    for candidate in centered_candidates:
         confidence = detector.estimate_detection_confidence(image_processed, candidate)
+        print(f"  Confiance candidat: {confidence:.3f}")
         if confidence >= detector.confidence_threshold:
             confident_candidates.append(candidate)
     
     print(f"Candidats avec confiance >= {detector.confidence_threshold}: {len(confident_candidates)}")
     
-    # Limitation du nombre de détections (max 6 pour éviter sur-détection)
-    if len(confident_candidates) > 6:
-        candidates_with_conf = [
-            (candidate, detector.estimate_detection_confidence(image_processed, candidate))
-            for candidate in confident_candidates
-        ]
-        candidates_with_conf.sort(key=lambda x: x[1], reverse=True)
-        confident_candidates = [c[0] for c in candidates_with_conf[:6]]
-    
     # Construction du résultat final
     bd = []
     
-    for candidate in confident_candidates:
+    for i, candidate in enumerate(confident_candidates):
         x1, x2, y1, y2 = candidate['bbox']
+        
+        # DEBUG: Vérifier les coordonnées
+        print(f"🎯 Candidat {i+1}: bbox brut = ({x1},{y1})-({x2},{y2})")
+        
+        # VALIDATION des coordonnées
+        if x1 >= x2 or y1 >= y2:
+            print(f"❌ Coordonnées invalides pour candidat {i+1}")
+            continue
+            
+        if x1 < 0 or y1 < 0 or x2 >= im_resized.shape[1] or y2 >= im_resized.shape[0]:
+            print(f"❌ Coordonnées hors image pour candidat {i+1}")
+            continue
         
         # Classification hybride
         ligne = detector.classify_line_hybrid(im_resized, (x1, x2, y1, y2), candidate)
+        
+        print(f"✅ Détection valide {i+1}: Ligne {ligne}, Coords ({x1},{y1})-({x2},{y2})")
         
         # Ajout au résultat
         bd.append([n, x1, x2, y1, y2, ligne])
@@ -1185,19 +1245,30 @@ def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     # Conversion en numpy array
     if bd:
         bd = np.array(bd)
+        print(f"📊 Résultat final: {len(bd)} détections")
     else:
         bd = np.empty((0, 6))
+        print("📊 Aucune détection finale")
     
-    # Affichage des résultats
-    plt.figure(figsize=(12, 8))  # Taille normale
+    # Affichage des résultats CORRIGÉ
+    plt.figure(figsize=(12, 8))
     plt.imshow(im_resized)
 
     if bd.size > 0:
         for k in range(bd.shape[0]):
-            draw_rectangle(bd[k,3], bd[k,4], bd[k,1], bd[k,2], 'g')
-            center_x = (bd[k,1] + bd[k,2]) / 2
-            center_y = (bd[k,3] + bd[k,4]) / 2
-            plt.text(center_x, center_y, str(int(bd[k,5])), 
+            x1, y1, x2, y2 = int(bd[k,1]), int(bd[k,3]), int(bd[k,2]), int(bd[k,4])
+            ligne = int(bd[k,5])
+            
+            print(f"🎨 Dessin rectangle {k+1}: ({x1},{y1})-({x2},{y2}) pour ligne {ligne}")
+            
+            # CORRECTION: Bon ordre des paramètres
+            draw_rectangle(x1, x2, y1, y2, 'g')  # ✅ ORDRE CORRECT
+            
+            # Position du texte
+            center_x = (x1 + x2) / 2
+            center_y = (y1 + y2) / 2
+            
+            plt.text(center_x, center_y, str(ligne), 
                     color='red', fontsize=14, fontweight='bold',
                     ha='center', va='center',
                     bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
@@ -1211,15 +1282,6 @@ def processOneMetroImage(nom, im, n, resizeFactor, save_images=False):
     plt.axis('off')
     plt.tight_layout()
     plt.show()
-    
-    # Sauvegarde conditionnelle
-    if save_images:
-        import os
-        output_dir = 'results_images'
-        os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, f'{nom}_detected.png')
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
-        print(f"Image sauvegardée : {output_path}")
     
     return im_resized, bd
 
