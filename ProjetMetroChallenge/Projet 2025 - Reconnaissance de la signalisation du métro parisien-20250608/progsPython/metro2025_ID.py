@@ -36,7 +36,7 @@ def metro2025(type_, viewImages=1):
         # ENTRAÎNER LE SYSTÈME (une seule fois)
         if metro_system is None:
             print("🎓 CHARGEMENT DU SYSTÈME ENTRAÎNÉ...")
-            model_path = '../../../runs/detect/train5/weights/best.pt' # Adaptez ce chemin !
+            model_path = '../../../runs/detect/train8/weights/best.pt' # Adaptez ce chemin !
             metro_system = FinalMetroSystem(model_path)
             print("✅ SYSTÈME CHARGÉ !")
         

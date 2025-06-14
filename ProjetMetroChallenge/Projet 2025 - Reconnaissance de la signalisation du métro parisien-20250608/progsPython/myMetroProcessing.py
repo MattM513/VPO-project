@@ -17,7 +17,7 @@ class FinalMetroSystem:
         self.model = YOLO(model_path)
         
         # On peut définir des seuils ici si besoin
-        self.confidence_threshold = 0.4 # Seuil de confiance pour garder une détection
+        self.confidence_threshold = 0.2 # Seuil de confiance pour garder une détection
 
     def predict(self, image_np):
         """

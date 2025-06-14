@@ -28,7 +28,7 @@ CHALLENGE_DIRECTORY = "BD_CHALLENGE"
 OUTPUT_FILE = 'myChallengeResults.mat'
 
 # Chemin vers votre meilleur modèle YOLO entraîné
-MODEL_PATH = 'models/best3.pt'
+MODEL_PATH = 'models/best4.pt'
 
 # Facteur de redimensionnement utilisé.
 # Si vous avez entraîné et traitez les images à leur taille originale, laissez 1.0
@@ -103,8 +103,26 @@ def run_challenge():
     if all_results:
         final_bd = np.concatenate(all_results, axis=0)
     else:
-        # S'il n'y a eu aucune détection, créer un tableau vide avec la bonne structure
         final_bd = np.empty((0, 6))
+    
+    try:
+        import pandas as pd
+        print("\n📊 Création d'un rapport CSV pour une analyse facile...")
+        # Définir les noms des colonnes pour la clarté
+        columns = ['image_num', 'y1', 'y2', 'x1', 'x2', 'predicted_class']
+        # Créer un DataFrame Pandas
+        df = pd.DataFrame(final_bd, columns=columns)
+        # Sauvegarder en fichier CSV
+        csv_output_file = 'myChallengeResults_readable.csv'
+        df.to_csv(csv_output_file, index=False)
+        print(f"✅ Rapport CSV sauvegardé dans '{csv_output_file}'")
+        # Vous pouvez aussi l'afficher directement dans la console
+        # print(df.to_string()) 
+    except ImportError:
+        print("\n/!\\ La bibliothèque Pandas n'est pas installée. Le rapport CSV n'a pas pu être créé.")
+        print("   Pour l'installer, tapez : pip install pandas")
+    except Exception as e:
+        print(f"\n/!\\ Erreur lors de la création du fichier CSV : {e}")
 
     sio.savemat(OUTPUT_FILE, {'BD': final_bd})
     print(f"\n🎉 Traitement terminé ! Les résultats ont été sauvegardés dans '{OUTPUT_FILE}'.")
