@@ -35,10 +35,10 @@ def metro2025(type_, viewImages=1):
         
         # ENTRAÎNER LE SYSTÈME (une seule fois)
         if metro_system is None:
-            print("🎓 ENTRAÎNEMENT DU SYSTÈME...")
-            metro_system = FinalMetroSystem()
-            metro_system.train_system('../BD_METRO', 'Apprentissage.mat', resize_factor=1)
-            print("✅ SYSTÈME ENTRAÎNÉ !")
+            print("🎓 CHARGEMENT DU SYSTÈME ENTRAÎNÉ...")
+            model_path = '../../../runs/detect/train/weights/best.pt' # Adaptez ce chemin !
+            metro_system = FinalMetroSystem(model_path)
+            print("✅ SYSTÈME CHARGÉ !")
         
     else:
         print("Bad identifier (should be 'Learn' or 'Test')")

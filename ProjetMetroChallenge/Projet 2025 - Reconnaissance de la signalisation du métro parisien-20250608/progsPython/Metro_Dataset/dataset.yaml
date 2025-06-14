@@ -1,0 +1,11 @@
+# dataset.yaml
+path: C:\Users\Matis\Desktop\docs\A2\Vision par ordi\VPO-project\ProjetMetroChallenge\Projet 2025 - Reconnaissance de la signalisation du métro parisien-20250608\progsPython\Metro_Dataset # <-- IMPORTANT: Mettez le chemin absolu
+train: images/train
+val: images/train  # On utilise le même set pour la validation pour l'instant
+
+# Classes
+# nc = nombre de classes
+nc: 14
+
+# names = noms des classes
+names: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14']
