@@ -24,7 +24,7 @@ def draw_rectangle(x1, x2, y1, y2, color):
     ax.add_patch(rect)
 
 # CONFIGURATION ================================================================
-challengeDirectory = "BD_CHALLENGE"
+challengeDirectory = "../BD_CHALLENGE"
 file_out = 'teamsNN.mat'  # Vos résultats
 resize_factor = 1
 

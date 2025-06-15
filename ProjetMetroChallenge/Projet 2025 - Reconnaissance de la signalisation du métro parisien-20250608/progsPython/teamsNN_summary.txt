@@ -1,0 +1,126 @@
+RÉSUMÉ DES DÉTECTIONS - CHALLENGE MÉTRO
+==================================================
+
+STATISTIQUES GLOBALES:
+- Images traitées: 100
+- Images avec détections: 86
+- Total détections: 330
+- Taux de détection: 86.0%
+
+RÉPARTITION PAR LIGNE:
+- Ligne 1: 17 détection(s)
+- Ligne 2: 14 détection(s)
+- Ligne 4: 5 détection(s)
+- Ligne 5: 9 détection(s)
+- Ligne 6: 16 détection(s)
+- Ligne 7: 18 détection(s)
+- Ligne 8: 66 détection(s)
+- Ligne 9: 4 détection(s)
+- Ligne 10: 7 détection(s)
+- Ligne 11: 63 détection(s)
+- Ligne 12: 56 détection(s)
+- Ligne 13: 27 détection(s)
+- Ligne 14: 28 détection(s)
+
+DÉTAIL PAR IMAGE:
+--------------------------------------------------
+IM (1).JPG (#1): 1 détection(s) - Lignes: [8]
+IM (7).JPG (#7): 12 détection(s) - Lignes: [11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 9, 9]
+IM (9).JPG (#9): 10 détection(s) - Lignes: [14, 11, 13, 11, 7, 4, 14, 12, 1, 7]
+IM (10).JPG (#10): 5 détection(s) - Lignes: [4, 14, 11, 4, 7]
+IM (11).JPG (#11): 5 détection(s) - Lignes: [14, 13, 14, 8, 13]
+IM (12).JPG (#12): Aucune détection
+IM (13).JPG (#13): 3 détection(s) - Lignes: [2, 1, 7]
+IM (16).JPG (#16): 4 détection(s) - Lignes: [13, 13, 7, 7]
+IM (17).JPG (#17): 9 détection(s) - Lignes: [11, 4, 14, 11, 14, 11, 11, 13, 11]
+IM (18).JPG (#18): 1 détection(s) - Lignes: [11]
+IM (19).JPG (#19): 2 détection(s) - Lignes: [2, 2]
+IM (20).JPG (#20): 8 détection(s) - Lignes: [11, 14, 14, 14, 6, 14, 1, 7]
+IM (22).JPG (#22): 2 détection(s) - Lignes: [11, 11]
+IM (23).JPG (#23): 2 détection(s) - Lignes: [11, 1]
+IM (24).JPG (#24): Aucune détection
+IM (29).JPG (#29): 3 détection(s) - Lignes: [13, 6, 1]
+IM (30).JPG (#30): 3 détection(s) - Lignes: [12, 12, 13]
+IM (31).JPG (#31): 3 détection(s) - Lignes: [12, 12, 1]
+IM (32).JPG (#32): 6 détection(s) - Lignes: [8, 14, 14, 12, 13, 6]
+IM (33).JPG (#33): 1 détection(s) - Lignes: [12]
+IM (34).JPG (#34): 2 détection(s) - Lignes: [13, 6]
+IM (75).JPG (#75): 2 détection(s) - Lignes: [12, 8]
+IM (77).JPG (#77): 2 détection(s) - Lignes: [14, 5]
+IM (78).JPG (#78): 4 détection(s) - Lignes: [8, 8, 6, 1]
+IM (79).JPG (#79): 15 détection(s) - Lignes: [11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11]
+IM (80).JPG (#80): 3 détection(s) - Lignes: [8, 5, 8]
+IM (81).JPG (#81): 4 détection(s) - Lignes: [8, 5, 11, 1]
+IM (82).JPG (#82): 4 détection(s) - Lignes: [11, 7, 8, 11]
+IM (83).JPG (#83): 2 détection(s) - Lignes: [11, 11]
+IM (84).JPG (#84): 1 détection(s) - Lignes: [8]
+IM (86).JPG (#86): Aucune détection
+IM (87).JPG (#87): 3 détection(s) - Lignes: [11, 1, 6]
+IM (89).JPG (#89): 4 détection(s) - Lignes: [11, 14, 5, 8]
+IM (90).JPG (#90): 8 détection(s) - Lignes: [11, 11, 11, 11, 11, 11, 7, 7]
+IM (91).JPG (#91): 6 détection(s) - Lignes: [11, 11, 11, 7, 1, 7]
+IM (93).JPG (#93): 1 détection(s) - Lignes: [2]
+IM (95).JPG (#95): Aucune détection
+IM (96).JPG (#96): Aucune détection
+IM (98).JPG (#98): Aucune détection
+IM (99).JPG (#99): 3 détection(s) - Lignes: [8, 5, 8]
+IM (100).JPG (#100): 3 détection(s) - Lignes: [2, 13, 1]
+IM (106).JPG (#106): 1 détection(s) - Lignes: [7]
+IM (107).JPG (#107): 4 détection(s) - Lignes: [14, 14, 8, 6]
+IM (109).JPG (#109): 7 détection(s) - Lignes: [12, 12, 12, 12, 12, 12, 12]
+IM (110).JPG (#110): Aucune détection
+IM (111).JPG (#111): 5 détection(s) - Lignes: [11, 11, 11, 5, 11]
+IM (112).JPG (#112): 2 détection(s) - Lignes: [13, 2]
+IM (113).JPG (#113): 4 détection(s) - Lignes: [12, 12, 12, 8]
+IM (114).JPG (#114): 2 détection(s) - Lignes: [11, 6]
+IM (115).JPG (#115): Aucune détection
+IM (116).JPG (#116): 1 détection(s) - Lignes: [11]
+IM (118).JPG (#118): Aucune détection
+IM (119).JPG (#119): 1 détection(s) - Lignes: [14]
+IM (120).JPG (#120): 1 détection(s) - Lignes: [6]
+IM (157).JPG (#157): 3 détection(s) - Lignes: [14, 10, 7]
+IM (158).JPG (#158): Aucune détection
+IM (159).JPG (#159): 2 détection(s) - Lignes: [2, 8]
+IM (160).JPG (#160): 5 détection(s) - Lignes: [8, 2, 7, 12, 14]
+IM (162).JPG (#162): 4 détection(s) - Lignes: [6, 14, 1, 6]
+IM (163).JPG (#163): 1 détection(s) - Lignes: [2]
+IM (164).JPG (#164): Aucune détection
+IM (166).JPG (#166): 1 détection(s) - Lignes: [2]
+IM (167).JPG (#167): Aucune détection
+IM (168).JPG (#168): 3 détection(s) - Lignes: [2, 1, 14]
+IM (169).JPG (#169): 1 détection(s) - Lignes: [2]
+IM (170).JPG (#170): 5 détection(s) - Lignes: [8, 10, 8, 2, 2]
+IM (171).JPG (#171): 4 détection(s) - Lignes: [8, 12, 8, 8]
+IM (172).JPG (#172): 7 détection(s) - Lignes: [8, 8, 8, 8, 8, 8, 13]
+IM (173).JPG (#173): 9 détection(s) - Lignes: [7, 8, 8, 8, 8, 8, 8, 8, 8]
+IM (174).JPG (#174): 2 détection(s) - Lignes: [9, 14]
+IM (175).JPG (#175): 2 détection(s) - Lignes: [11, 13]
+IM (176).JPG (#176): 13 détection(s) - Lignes: [8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8]
+IM (177).JPG (#177): 7 détection(s) - Lignes: [8, 8, 8, 8, 8, 8, 8]
+IM (178).JPG (#178): 4 détection(s) - Lignes: [13, 8, 12, 13]
+IM (180).JPG (#180): 1 détection(s) - Lignes: [9]
+IM (181).JPG (#181): 1 détection(s) - Lignes: [12]
+IM (191).JPG (#191): Aucune détection
+IM (192).JPG (#192): 4 détection(s) - Lignes: [14, 5, 5, 5]
+IM (230).JPG (#230): 1 détection(s) - Lignes: [13]
+IM (231).JPG (#231): 2 détection(s) - Lignes: [13, 13]
+IM (232).JPG (#232): 5 détection(s) - Lignes: [13, 13, 14, 1, 8]
+IM (233).JPG (#233): 6 détection(s) - Lignes: [8, 8, 8, 7, 6, 7]
+IM (234).JPG (#234): 1 détection(s) - Lignes: [1]
+IM (235).JPG (#235): 2 détection(s) - Lignes: [14, 13]
+IM (237).JPG (#237): 4 détection(s) - Lignes: [13, 13, 13, 13]
+IM (238).JPG (#238): 1 détection(s) - Lignes: [13]
+IM (239).JPG (#239): Aucune détection
+IM (240).JPG (#240): 1 détection(s) - Lignes: [4]
+IM (241).JPG (#241): 1 détection(s) - Lignes: [1]
+IM (242).JPG (#242): 4 détection(s) - Lignes: [14, 8, 1, 8]
+IM (243).JPG (#243): 4 détection(s) - Lignes: [8, 11, 11, 8]
+IM (244).JPG (#244): 1 détection(s) - Lignes: [12]
+IM (245).JPG (#245): 1 détection(s) - Lignes: [12]
+IM (246).JPG (#246): 1 détection(s) - Lignes: [12]
+IM (247).JPG (#247): 1 détection(s) - Lignes: [12]
+IM (248).JPG (#248): 1 détection(s) - Lignes: [10]
+IM (249).JPG (#249): 3 détection(s) - Lignes: [12, 6, 10]
+IM (250).JPG (#250): 11 détection(s) - Lignes: [6, 6, 6, 12, 12, 10, 12, 12, 12, 14, 12]
+IM (251).JPG (#251): 11 détection(s) - Lignes: [12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 10]
+IM (252).JPG (#252): 14 détection(s) - Lignes: [12, 12, 12, 12, 12, 12, 12, 10, 12, 12, 12, 12, 12, 12]
